@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.3] – 2026-11-04
+
+More accurate "who did it":
+- **Commands paired with late confirmations.** Zigbee2MQTT, MQTT and cloud devices report their new state
+  a moment later without the original context – it used to look like a wall switch. Now the state is
+  credited to whoever sent the command within 10 s (automation, you in the app, another integration).
+  Targets by entity, device and area are resolved.
+- **Impulses counted once.** On → back off by itself within 5 s (gate, doorbell) is one action, not two.
+- **"Outside HA"** instead of "switches": a change without a command from HA (wall switch, remote,
+  vendor app). It counts as a manual action only for lights, switches, covers, fans, media players,
+  locks and valves. Thermostats, vacuums … changing on their own are **device programs**.
+  Existing records are reclassified automatically.
+- Card: *Who runs the house* shows *outside HA* and *device programs* (hover explains each),
+  labels no longer wrap.
+
 ## [0.1.2] – 2026-11-04
 
 - **Igy Pattern Pilot Card** is part of the integration – it registers itself, no files or resources to add.

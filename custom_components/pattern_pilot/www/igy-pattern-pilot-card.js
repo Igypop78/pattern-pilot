@@ -36,7 +36,14 @@
     'Kto ovláda dom': 'Who runs the house',
     'za 7 dní, zmeny zariadení': 'last 7 days, device changes',
     'ty (aplikácia, hlas)': 'you (app, voice)',
-    'vypínače': 'switches',
+    'mimo HA': 'outside HA',
+    'programy zariadení': 'device programs',
+    'v aplikácii, na dashboarde alebo hlasom': 'in the app, on a dashboard or by voice',
+    'vypínač, ovládač, appka výrobcu – zmena bez príkazu z HA': 'wall switch, remote, vendor app – a change without a command from HA',
+    'automatizácie a skripty': 'automations and scripts',
+    'zariadenie samo (termostat, vysávač …)': 'the device on its own (thermostat, vacuum …)',
+    'iná integrácia poslala príkaz': 'another integration sent a command',
+    'vylúčení používatelia (Node-RED …)': 'excluded users (Node-RED …)',
     'automatizácie': 'automations',
     'iné integrácie': 'other integrations',
     'vylúčení': 'excluded',
@@ -60,10 +67,11 @@
     'pred {0} min': '{0} min ago'
   };
 
-  const VERSION = '0.1.2';
-  const C = { human: '#0a84ff', physical: '#ff9f0a', automation: '#30d158', system: '#8e8e93', external: '#bf5af2' };
-  const ACTOR_ORDER = ['human', 'physical', 'automation', 'system', 'external'];
-  const ACTOR_T = { human: 'ty (aplikácia, hlas)', physical: 'vypínače', automation: 'automatizácie', system: 'iné integrácie', external: 'vylúčení' };
+  const VERSION = '0.1.3';
+  const C = { human: '#0a84ff', physical: '#ff9f0a', automation: '#30d158', system: '#8e8e93', external: '#bf5af2', device: '#64d2ff' };
+  const ACTOR_ORDER = ['human', 'physical', 'automation', 'device', 'system', 'external'];
+  const ACTOR_T = { human: 'ty (aplikácia, hlas)', physical: 'mimo HA', automation: 'automatizácie', device: 'programy zariadení', system: 'iné integrácie', external: 'vylúčení' };
+  const ACTOR_H = { human: 'v aplikácii, na dashboarde alebo hlasom', physical: 'vypínač, ovládač, appka výrobcu – zmena bez príkazu z HA', automation: 'automatizácie a skripty', device: 'zariadenie samo (termostat, vysávač …)', system: 'iná integrácia poslala príkaz', external: 'vylúčení používatelia (Node-RED …)' };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 17l4-4.5 3.5 2.5 4-5.5 3 2"/><circle cx="3.5" cy="17" r="1.4" fill="currentColor"/><circle cx="7.5" cy="12.5" r="1.4" fill="currentColor"/><circle cx="11" cy="15" r="1.4" fill="currentColor"/><circle cx="15" cy="9.5" r="1.4" fill="currentColor"/><path d="M18 6.5l3-1-1 3"/></svg>';
   const ACT_ICON = {
@@ -118,10 +126,11 @@
     /* kto */
     .seg { display: flex; height: 12px; border-radius: 99px; overflow: hidden; background: rgba(127,127,127,.2); gap: 2px; }
     .seg i { display: block; height: 100%; }
-    .who { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px 12px; margin-top: 10px; font-size: 12.5px; color: var(--secondary-text-color); }
+    .who { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 6px 16px; margin-top: 10px; font-size: 12.5px; color: var(--secondary-text-color); }
     .who div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .who .l { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .who svg { width: 15px; height: 15px; flex: none; }
-    .who b { margin-left: auto; color: var(--primary-text-color); font-weight: 500; font-variant-numeric: tabular-nums; }
+    .who b { margin-left: auto; color: var(--primary-text-color); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
     /* top */
     .tr { display: grid; grid-template-columns: 1fr 70px 30px; gap: 10px; align-items: center; min-height: 34px; border-top: 1px solid rgba(127,127,127,.14); font-size: 13.5px; cursor: pointer; }
     .tr:first-of-type { border-top: 0; }
@@ -248,7 +257,7 @@
         if (tot) {
           h += `<div class="box"><div class="st">${_('Kto ovláda dom')}<small>${_('za 7 dní, zmeny zariadení')}</small></div><div class="seg">`
             + ACTOR_ORDER.filter((k) => acts[k]).map((k) => `<i style="width:${(acts[k] / tot * 100).toFixed(2)}%;background:${C[k]}"></i>`).join('') + `</div><div class="who">`
-            + ACTOR_ORDER.filter((k) => acts[k]).map((k) => `<div><span style="color:${C[k]}">${ACT_ICON[k]}</span>${_(ACTOR_T[k])}<b>${Math.round(acts[k] / tot * 100)} %</b></div>`).join('') + `</div></div>`;
+            + ACTOR_ORDER.filter((k) => acts[k]).map((k) => `<div title="${esc(_(ACTOR_H[k]))}"><span style="color:${C[k]}">${ACT_ICON[k]}</span><span class="l">${_(ACTOR_T[k])}</span><b>${Math.round(acts[k] / tot * 100)} %</b></div>`).join('') + `</div></div>`;
         }
       }
 

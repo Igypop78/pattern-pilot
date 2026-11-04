@@ -91,7 +91,29 @@ def test_migrate_schema_1(tmp_path):
     store.open()
     cols = {r[1] for r in store.conn.execute("PRAGMA table_info(context)")}
     assert "sun_elevation" in cols
-    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "2"
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "3"
     store.write([_row(time.time(), context={"day_type": "holiday", "sun_elevation": 12.5})])
     assert store.conn.execute("SELECT sun_elevation FROM context").fetchone()[0] == 12.5
+    store.close()
+
+
+def test_migrate_to_3_reclassifies_device_programs(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "pp.db")
+    store = EventStore(path)
+    store.open()
+    rows = [_row(time.time()), _row(time.time())]
+    rows[1].entity_id, rows[1].domain, rows[1].actor = "climate.trv", "climate", "physical"
+    rows[1].context = {"day_type": "workday"}
+    rows[0].actor = "physical"
+    store.write(rows)
+    store.conn.execute("UPDATE meta SET value='2' WHERE key='schema'")
+    store.conn.commit()
+    store.close()
+    store = EventStore(path)
+    store.open()
+    actors = dict(store.conn.execute("SELECT domain, actor FROM events"))
+    assert actors == {"light": "physical", "climate": "device"}
+    assert store.conn.execute("SELECT COUNT(*) FROM context").fetchone()[0] == 0
     store.close()

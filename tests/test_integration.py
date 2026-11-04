@@ -266,3 +266,100 @@ async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:
     resp = await client.get("/pattern_pilot/igy-pattern-pilot-card.js")
     assert resp.status == 200
     assert "igy-pattern-pilot-card" in await resp.text()
+
+
+async def test_command_paired_with_late_confirmation(hass: HomeAssistant) -> None:
+    """Zigbee2MQTT / MQTT: the state arrives later with a fresh context."""
+    entry = await _setup(hass, domains=["light", "switch", "climate"])
+    bulb = "light.zahrada_vchod_ziarovka_1"
+    hass.states.async_set(bulb, "off")
+    await hass.async_block_till_done()
+    run_ctx = Context(parent_id="trigger")
+    hass.bus.async_fire(
+        "automation_triggered",
+        {"entity_id": "automation.zahrada_vecer", "name": "x", "source": "sun"},
+        context=run_ctx,
+    )
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_on", "service_data": {"entity_id": [bulb]}},
+        context=run_ctx,
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(bulb, "on", context=Context())  # confirmation from MQTT
+    # person in the app, confirmation again without context
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_off", "service_data": {"entity_id": bulb}},
+        context=Context(user_id="igor"),
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(bulb, "off", context=Context())
+    await hass.async_block_till_done()
+
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == bulb]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "automation"), ("off", "human")]
+    assert rows[0]["ref"] == "automation.zahrada_vecer"
+
+
+async def test_pulse_counted_once(hass: HomeAssistant) -> None:
+    """Gate opened by another app directly on the Shelly: on → off after 1 s."""
+    entry = await _setup(hass, domains=["light", "switch", "climate"])
+    gate = "switch.brana"
+    hass.states.async_set(gate, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(gate, "on", context=Context())
+    hass.states.async_set(gate, "off", context=Context())
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == gate]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "physical")]
+
+
+async def test_pulse_from_ha_command(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["light", "switch", "climate"])
+    gate = "switch.brana"
+    hass.states.async_set(gate, "off")
+    await hass.async_block_till_done()
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "switch", "service": "turn_on", "service_data": {"entity_id": gate}},
+        context=Context(user_id="igor"),
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(gate, "on", context=Context())
+    hass.states.async_set(gate, "off", context=Context())  # Shelly timer
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == gate]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "human")]
+
+
+async def test_thermostat_own_program_is_device(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["light", "switch", "climate"])
+    trv = "climate.pracovna_termostat"
+    hass.states.async_set(trv, "heat", {"temperature": 20})
+    await hass.async_block_till_done()
+    hass.states.async_set(trv, "heat", {"temperature": 17}, context=Context())
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == trv]
+    assert [(r["kind"], r["actor"]) for r in rows] == [("attr", "device")]
+
+
+async def test_area_target_resolved(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import area_registry as ar, entity_registry as er
+
+    entry = await _setup(hass, domains=["light"])
+    area = ar.async_get(hass).async_create("Záhrada")
+    ent = er.async_get(hass).async_get_or_create("light", "test", "bulb2", suggested_object_id="zahrada_bulb")
+    er.async_get(hass).async_update_entity(ent.entity_id, area_id=area.id)
+    hass.states.async_set(ent.entity_id, "off")
+    await hass.async_block_till_done()
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_on", "service_data": {"area_id": area.id}},
+        context=Context(user_id="igor"),
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(ent.entity_id, "on", context=Context())
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == ent.entity_id]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "human")]

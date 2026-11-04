@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import time
 
-from .const import ACTION_DOMAINS, MANUAL_ACTORS, SCHEMA_VERSION
+from .const import ACTION_DOMAINS, MANUAL_ACTORS, PHYSICAL_MANUAL_DOMAINS, SCHEMA_VERSION
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -125,6 +125,18 @@ class EventStore:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(context)")}
             if "sun_elevation" not in cols:
                 conn.execute("ALTER TABLE context ADD COLUMN sun_elevation REAL")
+        if version < 3:
+            # changes outside HA on thermostats, vacuums … are the device's own program
+            marks = ",".join("?" * len(PHYSICAL_MANUAL_DOMAINS))
+            conn.execute(
+                f"UPDATE events SET actor='device' WHERE actor='physical'"
+                f" AND domain NOT IN ({marks})",
+                PHYSICAL_MANUAL_DOMAINS,
+            )
+            conn.execute(
+                "DELETE FROM context WHERE event_id IN"
+                " (SELECT id FROM events WHERE actor='device')"
+            )
         if version < SCHEMA_VERSION:
             conn.execute(
                 "UPDATE meta SET value=? WHERE key='schema'", (str(SCHEMA_VERSION),)

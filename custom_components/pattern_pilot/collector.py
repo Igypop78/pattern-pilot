@@ -11,6 +11,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    EVENT_CALL_SERVICE,
     EVENT_HOMEASSISTANT_FINAL_WRITE,
     EVENT_STATE_CHANGED,
     STATE_UNAVAILABLE,
@@ -25,7 +26,6 @@ from homeassistant.helpers import (
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
-    ACTION_DOMAINS,
     ACTOR_AUTOMATION,
     ACTOR_DEVICE,
     ACTOR_EXTERNAL,
@@ -49,6 +49,9 @@ from .const import (
     MANUAL_ACTORS,
     MEASURE_DEVICE_CLASSES,
     OVERRIDE_WINDOW_S,
+    PAIR_WINDOW_S,
+    PHYSICAL_MANUAL_DOMAINS,
+    PULSE_S,
     TRACKED_ATTRIBUTES,
 )
 from .context import ContextProvider
@@ -94,6 +97,12 @@ class Collector:
         self._buffer: list[EventRow] = []
         self._contexts: OrderedDict[str, str] = OrderedDict()
         self._last_auto: dict[str, tuple[float, str, str]] = {}
+        # entity → (ts, actor, user_id, ref) of the last command sent from HA
+        self._pending: dict[str, tuple[float, str, str | None, str | None]] = {}
+        # entity → (ts, old, new) of the last uncommanded change (pulse detection)
+        self._last_change: dict[str, tuple[float, str | None, str | None]] = {}
+        self.paired = 0
+        self.pulses = 0
         self._detectors: dict[str, ChangeDetector] = {}
         self._rates: dict[str, CounterRate] = {}
         self._sensor_kind: dict[str, str | None] = {}
@@ -113,6 +122,7 @@ class Collector:
             bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed),
             bus.async_listen(EVENT_AUTOMATION_TRIGGERED, self._on_run),
             bus.async_listen(EVENT_SCRIPT_STARTED, self._on_run),
+            bus.async_listen(EVENT_CALL_SERVICE, self._on_call_service),
             bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, self._on_registry),
             bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, self._on_registry),
             bus.async_listen(EVENT_HOMEASSISTANT_FINAL_WRITE, self._on_final_write),
@@ -209,9 +219,58 @@ class Collector:
             return ACTOR_HUMAN, context.user_id, None
         if context.parent_id:
             return ACTOR_SYSTEM, None, None
-        if domain in ACTION_DOMAINS:
+        if domain in PHYSICAL_MANUAL_DOMAINS:
             return ACTOR_PHYSICAL, None, None
         return ACTOR_DEVICE, None, None
+
+    # -- commands from HA (paired with late confirmations) ---------------------------
+    def _targets(self, data: dict[str, Any]) -> set[str]:
+        ids: set[str] = set()
+
+        def as_list(value: Any) -> list[str]:
+            if isinstance(value, str):
+                return [v.strip() for v in value.split(",") if v.strip()]
+            if isinstance(value, (list, tuple, set)):
+                return [str(v) for v in value]
+            return []
+
+        ids.update(e for e in as_list(data.get("entity_id")) if "." in e)
+        devices = set(as_list(data.get("device_id")))
+        areas = as_list(data.get("area_id"))
+        if areas or devices:
+            ent_reg = er.async_get(self.hass)
+            dev_reg = dr.async_get(self.hass)
+            for area_id in areas:
+                ids.update(e.entity_id for e in er.async_entries_for_area(ent_reg, area_id))
+                devices.update(d.id for d in dr.async_entries_for_area(dev_reg, area_id))
+            for device_id in devices:
+                ids.update(
+                    e.entity_id
+                    for e in er.async_entries_for_device(ent_reg, device_id)
+                    if e.area_id is None or not areas or e.area_id in areas
+                )
+        return ids
+
+    @callback
+    def _on_call_service(self, event: Event) -> None:
+        domain = event.data.get("domain")
+        if domain in (DOMAIN, "system_log", "logbook", "recorder", "notify", "persistent_notification"):
+            return
+        try:
+            ids = self._targets(event.data.get("service_data") or {})
+        except Exception:  # noqa: BLE001 - never break HA because of us
+            return
+        if not ids:
+            return
+        ts = event.time_fired.timestamp()
+        for entity_id in ids:
+            actor, user_id, ref = self._attribute(event.context, entity_id, "")
+            if actor in (ACTOR_PHYSICAL, ACTOR_DEVICE):
+                actor = ACTOR_SYSTEM  # a command without origin = some integration
+            self._pending[entity_id] = (ts, actor, user_id, ref)
+        if len(self._pending) > 2000:
+            cutoff = ts - PAIR_WINDOW_S
+            self._pending = {k: v for k, v in self._pending.items() if v[0] >= cutoff}
 
     # -- event handlers ------------------------------------------------------------
     @callback
@@ -343,6 +402,26 @@ class Collector:
         ts: float,
     ) -> None:
         actor, user_id, ref = self._attribute(state.context, entity_id, domain)
+        cmd = self._pending.get(entity_id)
+        if kind == KIND_STATE and domain not in TIMESTAMP_DOMAINS:
+            last = self._last_change.get(entity_id)
+            if (
+                last
+                and ts - last[0] <= PULSE_S
+                and new_v == last[1]
+                and old_v == last[2]
+                and actor not in (ACTOR_HUMAN, ACTOR_AUTOMATION, ACTOR_EXTERNAL)
+                and (cmd is None or cmd[0] <= last[0])  # no new command for the way back
+            ):
+                # went back by itself (gate impulse, doorbell) – one action, not two
+                self._last_change.pop(entity_id, None)
+                self.pulses += 1
+                return
+            self._last_change[entity_id] = (ts, old_v, new_v)
+        if actor in (ACTOR_PHYSICAL, ACTOR_DEVICE, ACTOR_SYSTEM):
+            if cmd and 0 <= ts - cmd[0] <= PAIR_WINDOW_S:
+                actor, user_id, ref = cmd[1], cmd[2], cmd[3]
+                self.paired += 1
         override = False
         if actor == ACTOR_AUTOMATION and ref:
             self._last_auto[entity_id] = (ts, ref, new_v or "")
@@ -469,6 +548,8 @@ class Collector:
             ),
             "context": self.context.describe(),
             "buffered": len(self._buffer),
+            "paired_with_command": self.paired,
+            "pulses_merged": self.pulses,
             "captured_since_start": self.captured,
             "manual_since_start": self.manual_captured,
         }

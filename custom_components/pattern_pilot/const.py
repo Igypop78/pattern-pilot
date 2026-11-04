@@ -6,10 +6,10 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.1.2"
+VERSION: Final = "0.1.3"
 
 DB_FILENAME: Final = "pattern_pilot.db"
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 
 # --- options keys -----------------------------------------------------------
 CONF_AREAS: Final = "areas"
@@ -113,13 +113,24 @@ ATTRIBUTE_MIN_DELTA: Final = {
 
 # Who caused a change.
 ACTOR_HUMAN: Final = "human"  # app, dashboard, voice (context.user_id)
-ACTOR_PHYSICAL: Final = "physical"  # wall switch, device button (no context origin)
+ACTOR_PHYSICAL: Final = "physical"  # outside HA: wall switch, remote, vendor app (no HA command)
 ACTOR_AUTOMATION: Final = "automation"  # automation or script
 ACTOR_SYSTEM: Final = "system"  # some other integration (parent context, no user)
-ACTOR_DEVICE: Final = "device"  # sensors reporting
+ACTOR_DEVICE: Final = "device"  # sensors reporting, devices running their own program
 ACTOR_EXTERNAL: Final = "external"  # excluded users (Node-RED, AppDaemon …)
 
 MANUAL_ACTORS: Final = (ACTOR_HUMAN, ACTOR_PHYSICAL)
+
+# A change outside HA counts as a person's action only for these domains
+# (a thermostat or vacuum changing on its own is the device's program).
+PHYSICAL_MANUAL_DOMAINS: Final = ("light", "switch", "cover", "fan", "media_player", "lock", "valve")
+
+# A command from HA (automation, app) and the device's confirmation arriving later
+# without context (Zigbee2MQTT, MQTT, cloud) are paired within this time.
+PAIR_WINDOW_S: Final = 10
+
+# On → back off by itself within this time (gate impulse, doorbell) = one action.
+PULSE_S: Final = 5
 
 # Event kinds stored in the database.
 KIND_STATE: Final = "state"
