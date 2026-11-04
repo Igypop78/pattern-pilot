@@ -1,6 +1,7 @@
 """Integration tests in a real Home Assistant (CI)."""
 
 from datetime import date
+import os
 import time
 
 import pytest
@@ -20,6 +21,16 @@ from custom_components.pattern_pilot.store import EventStore
 
 HUMIDITY = "sensor.kupelna_dole_vlhkost"
 WATER = "sensor.vodomer"
+
+
+@pytest.fixture(autouse=True)
+def fresh_database(hass: HomeAssistant):
+    """Every test starts with an empty Pattern Pilot database."""
+    for suffix in ("", "-wal", "-shm"):
+        path = hass.config.path(DB_FILENAME + suffix)
+        if os.path.exists(path):
+            os.remove(path)
+    yield
 
 
 def _learned_profile() -> dict:
@@ -180,7 +191,7 @@ async def test_any_sensor_rise_with_learned_profile(hass: HomeAssistant) -> None
     rows = await _rows(hass, entry)
     signals = [(r["entity_id"], r["old"], r["new"]) for r in rows if r["kind"] == "signal"]
     assert signals == [(HUMIDITY, "humidity", "rise")]
-    assert not [r for r in rows if r["kind"] == "state" and r["domain"] == "sensor"]
+    assert not [r for r in rows if r["kind"] == "state" and r["entity_id"].startswith("sensor.")]
 
     collector = entry.runtime_data.collector
     assert collector.describe()["sensors_ready"] == 1
@@ -204,7 +215,7 @@ async def test_energy_counter(hass: HomeAssistant) -> None:
         hass.states.async_set(WATER, value, attrs)
         await hass.async_block_till_done()
     rows = await _rows(hass, entry)
-    signals = [(r["old"], r["new"]) for r in rows if r["kind"] == "signal"]
+    signals = [(r["old"], r["new"]) for r in rows if r["kind"] == "signal" and r["entity_id"] == WATER]
     assert signals[:1] == [("counter", "rise")]
 
 
