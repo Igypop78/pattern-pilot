@@ -51,6 +51,7 @@ from .const import (
     OVERRIDE_WINDOW_S,
     PAIR_WINDOW_S,
     PHYSICAL_MANUAL_DOMAINS,
+    PULSE_DOMAINS,
     PULSE_S,
     TRACKED_ATTRIBUTES,
 )
@@ -406,7 +407,8 @@ class Collector:
         if kind == KIND_STATE and domain not in TIMESTAMP_DOMAINS:
             last = self._last_change.get(entity_id)
             if (
-                last
+                domain in PULSE_DOMAINS
+                and last
                 and ts - last[0] <= PULSE_S
                 and new_v == last[1]
                 and old_v == last[2]

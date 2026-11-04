@@ -7,7 +7,7 @@ More accurate "who did it":
   a moment later without the original context – it used to look like a wall switch. Now the state is
   credited to whoever sent the command within 10 s (automation, you in the app, another integration).
   Targets by entity, device and area are resolved.
-- **Impulses counted once.** On → back off by itself within 5 s (gate, doorbell) is one action, not two.
+- **Impulses counted once.** A switch that goes on and back off by itself within 5 s (gate, doorbell) is one action, not two.
 - **"Outside HA"** instead of "switches": a change without a command from HA (wall switch, remote,
   vendor app). It counts as a manual action only for lights, switches, covers, fans, media players,
   locks and valves. Thermostats, vacuums … changing on their own are **device programs**.

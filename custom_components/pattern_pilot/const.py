@@ -131,6 +131,7 @@ PAIR_WINDOW_S: Final = 10
 
 # On → back off by itself within this time (gate impulse, doorbell) = one action.
 PULSE_S: Final = 5
+PULSE_DOMAINS: Final = ("switch",)
 
 # Event kinds stored in the database.
 KIND_STATE: Final = "state"
