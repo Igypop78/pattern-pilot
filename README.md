@@ -9,17 +9,19 @@ sequences ("after the shower the fan goes on") and conditions ("only when it is 
 tests each idea against your own history and shows it with the evidence.
 Nothing runs until you press *Accept*. Everything stays local – no cloud, no LLM required.
 
-> **Status: v0.1 – data collection.** This version only records. Suggestions arrive in v0.2+,
+> **Status: v0.1.x – data collection.** This version only records. Suggestions arrive in v0.2+,
 > once there are ~3 weeks of data. Install it now so it has something to learn from.
 
 ## How it works
 
 1. **Collects** state changes of the domains and areas you choose and works out **who** did it:
    a person in the app, a wall switch, an automation, another integration or a device.
-2. **Detects household events** instead of storing raw sensor values: shower (humidity rises fast),
-   appliance (power jumps), water use.
-3. **Remembers context** with every manual action: workday or weekend, day or night, illuminance,
-   outdoor temperature, how many people are home.
+2. **Detects household events** instead of storing raw sensor values: every measured sensor
+   (humidity, temperature, power, light, CO₂ …) learns its normal variation and reports sudden
+   **rises and falls** – a shower, a kettle, an open window. Meters from the **Energy dashboard**
+   report when consumption starts and ends. Nothing to configure.
+3. **Remembers context** with every manual action – automatically: workday / weekend / public holiday
+   (country from Home Assistant settings), sun elevation, outdoor temperature, how many people are home.
 4. Keeps its **own history** (`/config/pattern_pilot.db`, default 120 days) – independent of the recorder,
    whose default 10 days is too short to find habits.
 5. *(v0.2+)* Nightly analysis → suggestions → backtest → card with **Accept / Edit / Not now / Never**.
@@ -32,14 +34,9 @@ Nothing runs until you press *Accept*. Everything stays local – no cloud, no L
 
 ## Setup wizard
 
-| Step | What you choose |
-|---|---|
-| Welcome | how long to keep history, time of the nightly analysis |
-| What to watch | domains, areas (empty = whole house), excluded entities, users that are not people (Node-RED, AppDaemon) |
-| Signals | bathroom humidity sensors, power sensors, water meter – with thresholds |
-| Context | workday sensor, illuminance, outdoor temperature |
-
-Everything can be changed later under **Configure**.
+Two steps: **Welcome** (history length, time of the nightly analysis, sensitivity) and
+**What to watch** (domains, areas – empty = whole house, excluded entities, users that are not people
+such as Node-RED). Everything can be changed later under **Configure**.
 
 ## Entities (v0.1)
 

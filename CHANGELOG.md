@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.1] – 2026-11-04
+
+Universal and without questions – nothing has to be chosen by hand.
+
+- **One change detector for any measured sensor** (humidity, temperature, power, illuminance, CO₂,
+  air quality, sound, flow) instead of shower / appliance / water. Every sensor first learns its
+  normal variation (1 day), then sudden **rises and falls** are stored. Learned values survive restarts.
+- **Counters from the Energy dashboard** (grid, solar, battery, gas, water, devices) → consumption
+  starts / ends.
+- **Automatic context:** workday / weekend / public holiday (country set in Home Assistant),
+  sun elevation, outdoor temperature from a weather entity, people at home.
+- Setup wizard shortened to *Welcome → What to watch*. New option **sensitivity** (low / medium / high).
+- Settings of 0.1.0 are migrated automatically, collected data is kept.
+- Integration icon (Home Assistant 2026.3+).
+
 ## [0.1.0] – 2026-11-04
 
 First version – **data collection only**, no suggestions yet.
