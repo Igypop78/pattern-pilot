@@ -233,3 +233,36 @@ async def test_unload(hass: HomeAssistant) -> None:
     entry = await _setup(hass)
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_overview_websocket(hass: HomeAssistant, hass_ws_client) -> None:
+    entry = await _setup(hass)
+    light = "light.kuchyna_linka"
+    hass.states.async_set(light, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(light, "on", context=Context(user_id="igor"))
+    hass.states.async_set(light, "off", context=Context())
+    await hass.async_block_till_done()
+    await entry.runtime_data.collector.async_flush()
+
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "pattern_pilot/overview"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    res = msg["result"]
+    assert res["status"] == "collecting"
+    assert res["days_needed"] == 21
+    assert len(res["hourly_today"]) == 24
+    assert sum(res["hourly_today"]) == 2
+    assert res["actors"] == {"human": 1, "physical": 1}
+    assert res["top"][0]["entity_id"] == light
+    assert res["top"][0]["count"] == 2
+    assert res["recent"][0]["entity_id"] == light
+
+
+async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:
+    await _setup(hass)
+    client = await hass_client()
+    resp = await client.get("/pattern_pilot/igy-pattern-pilot-card.js")
+    assert resp.status == 200
+    assert "igy-pattern-pilot-card" in await resp.text()

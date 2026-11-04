@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+from pathlib import Path
 
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
@@ -23,13 +28,18 @@ from .const import (
     DB_FILENAME,
     DEFAULT_ANALYSIS_TIME,
     DEFAULT_HISTORY_DAYS,
+    DOMAIN,
     SIGNAL_STATS_UPDATED,
+    VERSION,
 )
 from .store import EventStore, StoreStats
+from .websocket import async_register as async_register_ws
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+CARD_URL = "/pattern_pilot/igy-pattern-pilot-card.js"
 STATS_INTERVAL = timedelta(minutes=5)
 PROFILE_INTERVAL = timedelta(hours=1)
 
@@ -51,6 +61,15 @@ def _parse_time(value: str) -> tuple[int, int, int]:
     parts = [int(p) for p in (value or DEFAULT_ANALYSIS_TIME).split(":")]
     parts += [0] * (3 - len(parts))
     return parts[0], parts[1], parts[2]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the Igy Pattern Pilot card – no files to copy, no resource to add."""
+    card = Path(__file__).parent / "www" / "igy-pattern-pilot-card.js"
+    await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(card), True)])
+    if "frontend" in hass.config.components:
+        add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry) -> bool:
@@ -107,6 +126,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
     entry.async_on_unload(hass.bus.async_listen(EVENT_HOMEASSISTANT_STOP, on_stop))
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
+    async_register_ws(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

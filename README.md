@@ -38,6 +38,22 @@ Two steps: **Welcome** (history length, time of the nightly analysis, sensitivit
 **What to watch** (domains, areas – empty = whole house, excluded entities, users that are not people
 such as Node-RED). Everything can be changed later under **Configure**.
 
+## Card
+
+The integration brings its own card – **Igy Pattern Pilot Card** (`custom:igy-pattern-pilot-card`).
+It registers itself; just add it to a dashboard. It shows the learning progress, the daily rhythm of
+manual actions, who runs the house (you, wall switches, automations), the entities you control by hand
+most often and the latest events.
+
+```yaml
+type: custom:igy-pattern-pilot-card
+title: Pattern Pilot   # optional
+rhythm: true           # optional – each section can be hidden
+actors: true
+top: true
+recent: true
+```
+
 ## Entities (v0.1)
 
 | Entity | Meaning |

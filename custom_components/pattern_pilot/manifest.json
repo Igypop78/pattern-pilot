@@ -2,13 +2,17 @@
   "domain": "pattern_pilot",
   "name": "Pattern Pilot",
   "after_dependencies": [
-    "energy"
+    "energy",
+    "frontend"
   ],
   "codeowners": [
     "@Igypop78"
   ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "http",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/Igypop78/pattern-pilot",
   "integration_type": "service",
   "iot_class": "calculated",
@@ -17,5 +21,5 @@
     "holidays"
   ],
   "single_config_entry": true,
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

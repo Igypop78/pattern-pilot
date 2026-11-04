@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import time
 
-from .const import MANUAL_ACTORS, SCHEMA_VERSION
+from .const import ACTION_DOMAINS, MANUAL_ACTORS, SCHEMA_VERSION
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -281,3 +281,53 @@ class EventStore:
             )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
+
+    def overview(self, since_hourly: float, since_week: float, recent_limit: int = 12) -> dict:
+        """Data for the card: manual action times, who controls the house, top entities, recent events."""
+        manual = tuple(MANUAL_ACTORS)
+        m_marks = ",".join("?" * len(manual))
+        domains = tuple(ACTION_DOMAINS)
+        d_marks = ",".join("?" * len(domains))
+        with self._lock:
+            c = self.conn
+            manual_ts = [
+                r[0]
+                for r in c.execute(
+                    f"SELECT ts FROM events WHERE ts >= ? AND actor IN ({m_marks})",
+                    (since_hourly, *manual),
+                )
+            ]
+            actors = dict(
+                c.execute(
+                    f"SELECT actor, COUNT(*) FROM events WHERE ts >= ? AND kind IN ('state','attr')"
+                    f" AND domain IN ({d_marks}) GROUP BY actor",
+                    (since_week, *domains),
+                )
+            )
+            top = [
+                {"entity_id": r[0], "count": r[1], "last": r[2]}
+                for r in c.execute(
+                    f"SELECT entity_id, COUNT(*), MAX(ts) FROM events WHERE ts >= ?"
+                    f" AND actor IN ({m_marks}) GROUP BY entity_id ORDER BY 2 DESC LIMIT 6",
+                    (since_week, *manual),
+                )
+            ]
+            signals_week = c.execute(
+                "SELECT COUNT(*) FROM events WHERE ts >= ? AND kind='signal' AND new IN ('rise','fall')",
+                (since_week,),
+            ).fetchone()[0]
+            cur = c.execute(
+                "SELECT ts, entity_id, domain, kind, old, new, value, actor, ref, override FROM events"
+                " WHERE NOT (kind='signal' AND new IN ('rise_end','fall_end'))"
+                " ORDER BY id DESC LIMIT ?",
+                (recent_limit,),
+            )
+            cols = [d[0] for d in cur.description]
+            recent = [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
+        return {
+            "manual_ts": manual_ts,
+            "actors": actors,
+            "top": top,
+            "signals_week": signals_week,
+            "recent": recent,
+        }
