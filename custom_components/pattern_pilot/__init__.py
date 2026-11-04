@@ -16,6 +16,9 @@ from homeassistant.util import dt as dt_util
 from .collector import Collector
 from .const import (
     CONF_ANALYSIS_TIME,
+    CONF_DOMAINS,
+    DEFAULT_DOMAINS,
+    REMOVED_OPTIONS,
     CONF_HISTORY_DAYS,
     DB_FILENAME,
     DEFAULT_ANALYSIS_TIME,
@@ -28,6 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 STATS_INTERVAL = timedelta(minutes=5)
+PROFILE_INTERVAL = timedelta(hours=1)
 
 
 @dataclass
@@ -64,6 +68,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
 
     async def maintenance(_now=None) -> None:
         await collector.async_flush()
+        await collector.async_save_profiles()
+        await collector.async_refresh()
         keep = int(entry.options.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS))
         removed = await hass.async_add_executor_job(store.purge, keep)
         if dt_util.now().weekday() == 6:
@@ -71,6 +77,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
         data.last_maintenance = dt_util.now().isoformat()
         _LOGGER.debug("Pattern Pilot maintenance: %s old events removed", removed)
         await refresh_stats()
+
+    async def save_profiles(_now=None) -> None:
+        await collector.async_save_profiles()
 
     async def flush_and_refresh(_now=None) -> None:
         await collector.async_flush()
@@ -83,6 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
     timers = [
         async_track_time_change(hass, maintenance, hour=hour, minute=minute, second=second),
         async_track_time_interval(hass, flush_and_refresh, STATS_INTERVAL),
+        async_track_time_interval(hass, save_profiles, PROFILE_INTERVAL),
     ]
 
     def cancel_timers() -> None:
@@ -98,6 +108,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """v1 → v2: universal detectors (no sensor choices), automatic context."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        options = {k: v for k, v in entry.options.items() if k not in REMOVED_OPTIONS}
+        domains = list(options.get(CONF_DOMAINS) or DEFAULT_DOMAINS)
+        if "sensor" not in domains:
+            domains.append("sensor")
+        options[CONF_DOMAINS] = domains
+        hass.config_entries.async_update_entry(entry, options=options, version=2)
+        _LOGGER.info("Pattern Pilot: settings migrated to version 2")
     return True
 
 

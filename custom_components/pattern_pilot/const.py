@@ -6,33 +6,37 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.1.0"
+VERSION: Final = "0.1.1"
 
 DB_FILENAME: Final = "pattern_pilot.db"
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 
 # --- options keys -----------------------------------------------------------
 CONF_AREAS: Final = "areas"
 CONF_DOMAINS: Final = "domains"
 CONF_EXCLUDE_ENTITIES: Final = "exclude_entities"
 CONF_EXCLUDE_USERS: Final = "exclude_users"
-CONF_HUMIDITY_SENSORS: Final = "humidity_sensors"
-CONF_HUMIDITY_RISE: Final = "humidity_rise"
-CONF_POWER_SENSORS: Final = "power_sensors"
-CONF_POWER_STEP: Final = "power_step"
-CONF_WATER_SENSORS: Final = "water_sensors"
-CONF_WATER_MIN: Final = "water_min"
-CONF_WORKDAY_SENSOR: Final = "workday_sensor"
-CONF_LUX_SENSOR: Final = "lux_sensor"
-CONF_TEMP_SENSOR: Final = "temperature_sensor"
+CONF_SENSITIVITY: Final = "sensitivity"
 CONF_HISTORY_DAYS: Final = "history_days"
 CONF_ANALYSIS_TIME: Final = "analysis_time"
 
 DEFAULT_HISTORY_DAYS: Final = 120
 DEFAULT_ANALYSIS_TIME: Final = "03:45:00"
-DEFAULT_HUMIDITY_RISE: Final = 8.0  # %RH within 10 minutes
-DEFAULT_POWER_STEP: Final = 1500.0  # W
-DEFAULT_WATER_MIN: Final = 3.0  # litres
+DEFAULT_SENSITIVITY: Final = "medium"
+SENSITIVITIES: Final = ["low", "medium", "high"]
+
+# Options of v0.1.0 that are no longer used (removed by migration).
+REMOVED_OPTIONS: Final = (
+    "humidity_sensors",
+    "humidity_rise",
+    "power_sensors",
+    "power_step",
+    "water_sensors",
+    "water_min",
+    "workday_sensor",
+    "lux_sensor",
+    "temperature_sensor",
+)
 
 # Days of data before suggestions make sense.
 MIN_DAYS_FOR_ANALYSIS: Final = 21
@@ -64,10 +68,29 @@ ACTION_DOMAINS: Final = (
 )
 
 # Domains that are only signals (what happens in the house).
+# "sensor" = numeric sensors → rise / fall events (raw values are not stored).
 SIGNAL_DOMAINS: Final = (
     "binary_sensor",
     "person",
     "event",
+    "sensor",
+)
+
+# Measured values worth watching (rise / fall says something about people).
+MEASURE_DEVICE_CLASSES: Final = (
+    "humidity",
+    "moisture",
+    "temperature",
+    "power",
+    "illuminance",
+    "carbon_dioxide",
+    "volatile_organic_compounds",
+    "volatile_organic_compounds_parts",
+    "pm25",
+    "pm10",
+    "aqi",
+    "sound_pressure",
+    "volume_flow_rate",
 )
 
 DEFAULT_DOMAINS: Final = [*ACTION_DOMAINS, *SIGNAL_DOMAINS]
@@ -105,12 +128,6 @@ KIND_SIGNAL: Final = "signal"
 KIND_RUN: Final = "run"
 KIND_SERVICE: Final = "service"
 
-# Signals produced by the detectors.
-SIGNAL_SHOWER_START: Final = "shower_start"
-SIGNAL_SHOWER_END: Final = "shower_end"
-SIGNAL_LOAD_START: Final = "load_start"
-SIGNAL_LOAD_END: Final = "load_end"
-SIGNAL_WATER_USE: Final = "water_use"
 
 # A person reverting what an automation did within this time = override.
 OVERRIDE_WINDOW_S: Final = 120

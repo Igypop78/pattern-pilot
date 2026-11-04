@@ -6,19 +6,21 @@
     "step": {
       "user": {
         "title": "Welcome to Pattern Pilot",
-        "description": "Pattern Pilot watches what people in your home do by hand, learns the routines and later suggests automations. Everything stays local.\n\nIn this version it only collects data. Suggestions need about 3 weeks of history.",
+        "description": "Pattern Pilot watches what people in your home do by hand, learns the routines and later suggests automations. Everything stays local and nothing needs to be set up by hand: sensors, Energy dashboard meters, holidays, sun and weather are used automatically.\n\nThis version only collects data. Suggestions need about 3 weeks of history.",
         "data": {
           "history_days": "Keep history",
-          "analysis_time": "Nightly analysis at"
+          "analysis_time": "Nightly analysis at",
+          "sensitivity": "Sensitivity of change detection"
         },
         "data_description": {
           "history_days": "Pattern Pilot keeps its own history, independent of the recorder.",
-          "analysis_time": "Maintenance and (later) analysis run once a day at this time."
+          "analysis_time": "Maintenance and (later) analysis run once a day at this time.",
+          "sensitivity": "How big a sudden change of a sensor must be to count as an event. Each sensor learns its normal variation during the first day."
         }
       },
       "tracking": {
         "title": "What to watch",
-        "description": "Choose which entities Pattern Pilot follows. Configuration and diagnostic entities are always skipped.",
+        "description": "Default = the whole house. Configuration and diagnostic entities are always skipped.",
         "data": {
           "domains": "Domains",
           "areas": "Only these areas",
@@ -26,29 +28,9 @@
           "exclude_users": "Not a person (Node-RED, AppDaemon, …)"
         },
         "data_description": {
+          "domains": "\"sensor\" = measured values (humidity, temperature, power, light, CO₂ …) and Energy dashboard meters – only sudden rises and falls are stored.",
           "areas": "Leave empty to watch the whole house. People are always watched.",
           "exclude_users": "Actions of these users are not counted as manual actions."
-        }
-      },
-      "signals": {
-        "title": "Signals in the house",
-        "description": "Sensors whose values reveal what is going on: a shower (humidity rises), an appliance (power jumps), water use. Only the detected events are stored, not the raw values.",
-        "data": {
-          "humidity_sensors": "Bathroom humidity sensors",
-          "humidity_rise": "Shower = humidity rise of at least",
-          "power_sensors": "Power sensors (house, sockets)",
-          "power_step": "Appliance = power jump of at least",
-          "water_sensors": "Water meter or flow sensor",
-          "water_min": "Count water use from"
-        }
-      },
-      "context": {
-        "title": "Context",
-        "description": "These values are saved with every manual action so that conditions can be found later (only on workdays, only when dark …).",
-        "data": {
-          "workday_sensor": "Workday sensor",
-          "lux_sensor": "Illuminance sensor",
-          "temperature_sensor": "Outdoor temperature (sensor or weather)"
         }
       }
     }
@@ -59,8 +41,6 @@
         "title": "Pattern Pilot",
         "menu_options": {
           "tracking": "What to watch",
-          "signals": "Signals in the house",
-          "context": "Context",
           "analysis": "History and analysis"
         }
       },
@@ -73,35 +53,32 @@
           "exclude_users": "Not a person (Node-RED, AppDaemon, …)"
         },
         "data_description": {
+          "domains": "\"sensor\" = measured values (humidity, temperature, power, light, CO₂ …) and Energy dashboard meters – only sudden rises and falls are stored.",
           "areas": "Leave empty to watch the whole house. People are always watched.",
           "exclude_users": "Actions of these users are not counted as manual actions."
-        }
-      },
-      "signals": {
-        "title": "Signals in the house",
-        "data": {
-          "humidity_sensors": "Bathroom humidity sensors",
-          "humidity_rise": "Shower = humidity rise of at least",
-          "power_sensors": "Power sensors (house, sockets)",
-          "power_step": "Appliance = power jump of at least",
-          "water_sensors": "Water meter or flow sensor",
-          "water_min": "Count water use from"
-        }
-      },
-      "context": {
-        "title": "Context",
-        "data": {
-          "workday_sensor": "Workday sensor",
-          "lux_sensor": "Illuminance sensor",
-          "temperature_sensor": "Outdoor temperature (sensor or weather)"
         }
       },
       "analysis": {
         "title": "History and analysis",
         "data": {
           "history_days": "Keep history",
-          "analysis_time": "Nightly analysis at"
+          "analysis_time": "Nightly analysis at",
+          "sensitivity": "Sensitivity of change detection"
+        },
+        "data_description": {
+          "history_days": "Pattern Pilot keeps its own history, independent of the recorder.",
+          "analysis_time": "Maintenance and (later) analysis run once a day at this time.",
+          "sensitivity": "How big a sudden change of a sensor must be to count as an event. Each sensor learns its normal variation during the first day."
         }
+      }
+    }
+  },
+  "selector": {
+    "sensitivity": {
+      "options": {
+        "low": "Low – only big changes",
+        "medium": "Medium",
+        "high": "High – also smaller changes"
       }
     }
   },
@@ -114,11 +91,21 @@
           "ready": "Ready"
         }
       },
-      "days_of_data": { "name": "Days of data" },
-      "events": { "name": "Recorded events" },
-      "events_today": { "name": "Events today" },
-      "manual_actions_today": { "name": "Manual actions today" },
-      "database_size": { "name": "Database size" }
+      "days_of_data": {
+        "name": "Days of data"
+      },
+      "events": {
+        "name": "Recorded events"
+      },
+      "events_today": {
+        "name": "Events today"
+      },
+      "manual_actions_today": {
+        "name": "Manual actions today"
+      },
+      "database_size": {
+        "name": "Database size"
+      }
     }
   }
 }

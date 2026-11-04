@@ -59,3 +59,39 @@ def test_reopen_keeps_data(tmp_path):
     store2.open()
     assert store2.stats(0).total == 1
     store2.close()
+
+
+def test_profiles(tmp_path):
+    store = EventStore(str(tmp_path / "pp.db"))
+    store.open()
+    store.save_profiles({"sensor.a": {"first_ts": 1.0, "ranges": [0.5, 0.6]}})
+    store.save_profiles({"sensor.a": {"first_ts": 1.0, "ranges": [0.7]}, "sensor.b": {"x": 1}})
+    profiles = store.load_profiles()
+    assert profiles["sensor.a"]["ranges"] == [0.7]
+    assert "sensor.b" in profiles
+    store.close()
+
+
+def test_migrate_schema_1(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "pp.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        INSERT INTO meta VALUES ('schema', '1');
+        CREATE TABLE context (event_id INTEGER PRIMARY KEY, day_type TEXT, sun TEXT,
+            lux REAL, temperature REAL, people_home INTEGER);
+        """
+    )
+    conn.commit()
+    conn.close()
+    store = EventStore(path)
+    store.open()
+    cols = {r[1] for r in store.conn.execute("PRAGMA table_info(context)")}
+    assert "sun_elevation" in cols
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "2"
+    store.write([_row(time.time(), context={"day_type": "holiday", "sun_elevation": 12.5})])
+    assert store.conn.execute("SELECT sun_elevation FROM context").fetchone()[0] == 12.5
+    store.close()

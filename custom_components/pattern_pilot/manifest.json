@@ -1,14 +1,21 @@
 {
   "domain": "pattern_pilot",
   "name": "Pattern Pilot",
-  "codeowners": ["@Igypop78"],
+  "after_dependencies": [
+    "energy"
+  ],
+  "codeowners": [
+    "@Igypop78"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/Igypop78/pattern-pilot",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Igypop78/pattern-pilot/issues",
-  "requirements": [],
+  "requirements": [
+    "holidays"
+  ],
   "single_config_entry": true,
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

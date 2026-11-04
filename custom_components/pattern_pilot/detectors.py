@@ -1,22 +1,51 @@
-"""Signal detectors – turn raw sensor values into household events.
+"""Universal change detection – turns sensor values into household events.
 
-Pure Python, no Home Assistant imports, so they can be unit tested alone.
-Every detector gets ``update(ts, value)`` (ts = epoch seconds, value already
-converted to the detector unit) and returns a list of ``Signal``.
+Pure Python, no Home Assistant imports, so it can be unit tested alone.
+
+* ``ChangeDetector`` – any measured value (humidity, temperature, power,
+  illuminance, CO₂ …). It learns the normal 10-minute variation of the
+  sensor and reports a *rise* or *fall* that is clearly bigger.
+* ``CounterRate`` – turns a counter (energy, water, gas) into a rate per
+  hour, so the same ``ChangeDetector`` sees "consumption started / ended".
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
-from .const import (
-    SIGNAL_LOAD_END,
-    SIGNAL_LOAD_START,
-    SIGNAL_SHOWER_END,
-    SIGNAL_SHOWER_START,
-    SIGNAL_WATER_USE,
-)
+SIGNAL_RISE = "rise"
+SIGNAL_RISE_END = "rise_end"
+SIGNAL_FALL = "fall"
+SIGNAL_FALL_END = "fall_end"
+
+# multiplier of the learned normal variation (median of 10-minute ranges);
+# the median stays robust even if real events happen while learning
+SENSITIVITY_FACTOR = {"high": 3.0, "medium": 5.0, "low": 8.0}
+
+# absolute minimum change per device class (in the unit after conversion)
+FLOORS: dict[str, float] = {
+    "humidity": 4.0,
+    "moisture": 5.0,
+    "temperature": 1.0,
+    "power": 300.0,  # W
+    "illuminance": 50.0,
+    "carbon_dioxide": 150.0,
+    "volatile_organic_compounds": 100.0,
+    "volatile_organic_compounds_parts": 100.0,
+    "pm25": 10.0,
+    "pm10": 10.0,
+    "sound_pressure": 10.0,
+    "aqi": 15.0,
+}
+DEFAULT_FLOOR = 1e-6
+
+LEARN_SECONDS = 24 * 3600  # learn the normal variation first
+MIN_SAMPLES = 30
+SAMPLE_EVERY = 60  # store a variation sample at most once a minute
+MAX_SAMPLES = 1000
+MAX_ACTIVE = 2 * 3600
 
 
 @dataclass(slots=True)
@@ -28,216 +57,156 @@ class Signal:
     value: float | None = None
 
 
-class HumidityRiseDetector:
-    """Shower / bath: humidity rises fast, later falls back.
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
+    return ordered[idx]
 
-    Start: value - min(last ``window_s``) >= ``rise``.
-    End: value falls to baseline + rise/2, or after ``max_duration_s``.
-    """
+
+class ChangeDetector:
+    """Rise / fall detector with a learned, per-sensor threshold."""
 
     def __init__(
         self,
-        rise: float = 8.0,
+        floor: float = DEFAULT_FLOOR,
+        sensitivity: str = "medium",
         window_s: float = 600,
-        max_duration_s: float = 7200,
+        profile: dict[str, Any] | None = None,
     ) -> None:
-        self.rise = rise
+        self.floor = floor
+        self.factor = SENSITIVITY_FACTOR.get(sensitivity, SENSITIVITY_FACTOR["medium"])
         self.window_s = window_s
-        self.max_duration_s = max_duration_s
-        self._samples: deque[tuple[float, float]] = deque()
-        self._active_since: float | None = None
+        self._window: deque[tuple[float, float]] = deque()
+        self._ranges: deque[float] = deque(maxlen=MAX_SAMPLES)
+        self._first_ts: float | None = None
+        self._last_sample_ts = 0.0
+        self._active: str | None = None  # "rise" / "fall"
+        self._active_since = 0.0
         self._baseline = 0.0
+        self._threshold_cache: float | None = None
+        if profile:
+            self._first_ts = profile.get("first_ts")
+            self._ranges.extend(profile.get("ranges", [])[-MAX_SAMPLES:])
+
+    # -- learning ------------------------------------------------------------------
+    @property
+    def learned(self) -> bool:
+        return self._first_ts is not None and len(self._ranges) >= MIN_SAMPLES
+
+    def is_ready(self, ts: float) -> bool:
+        return (
+            self.learned
+            and self._first_ts is not None
+            and ts - self._first_ts >= LEARN_SECONDS
+        )
 
     @property
-    def active(self) -> bool:
-        return self._active_since is not None
+    def threshold(self) -> float:
+        if self._threshold_cache is None:
+            median = _percentile(list(self._ranges), 0.5)
+            self._threshold_cache = max(self.floor, self.factor * median)
+        return self._threshold_cache
 
+    def profile(self) -> dict[str, Any]:
+        return {"first_ts": self._first_ts, "ranges": [round(r, 4) for r in self._ranges]}
+
+    # -- detection -----------------------------------------------------------------
     def update(self, ts: float, value: float) -> list[Signal]:
-        out: list[Signal] = []
-        if self._active_since is not None:
-            if (
-                value <= self._baseline + self.rise / 2
-                or ts - self._active_since >= self.max_duration_s
-            ):
-                minutes = round((ts - self._active_since) / 60, 1)
-                out.append(Signal(ts, SIGNAL_SHOWER_END, minutes))
-                self._active_since = None
-                self._samples.clear()
-            self._samples.append((ts, value))
-            return out
+        if self._first_ts is None:
+            self._first_ts = ts
+        self._window.append((ts, value))
+        while len(self._window) > 1 and ts - self._window[0][0] > self.window_s:
+            self._window.popleft()
+        low = min(v for _, v in self._window)
+        high = max(v for _, v in self._window)
 
-        self._samples.append((ts, value))
-        while self._samples and ts - self._samples[0][0] > self.window_s:
-            self._samples.popleft()
-        low = min(v for _, v in self._samples)
-        if value - low >= self.rise:
-            self._baseline = low
-            self._active_since = ts
-            out.append(Signal(ts, SIGNAL_SHOWER_START, round(value - low, 1)))
+        out: list[Signal] = []
+        if self._active is not None:
+            out += self._check_end(ts, value)
+        elif self.is_ready(ts):
+            thr = self.threshold
+            if value - low >= thr:
+                self._start(ts, SIGNAL_RISE, low)
+                out.append(Signal(ts, SIGNAL_RISE, round(value - low, 3)))
+            elif high - value >= thr:
+                self._start(ts, SIGNAL_FALL, high)
+                out.append(Signal(ts, SIGNAL_FALL, round(high - value, 3)))
+
+        # learn only from quiet periods (not during an event)
+        if self._active is None and not out and ts - self._last_sample_ts >= SAMPLE_EVERY:
+            self._ranges.append(high - low)
+            self._last_sample_ts = ts
+            self._threshold_cache = None
         return out
 
+    def _start(self, ts: float, kind: str, baseline: float) -> None:
+        self._active = kind
+        self._active_since = ts
+        self._baseline = baseline
 
-class PowerStepDetector:
-    """Appliance switched on: consumption jumps by ``step`` W above baseline.
+    def _check_end(self, ts: float, value: float) -> list[Signal]:
+        thr = self.threshold
+        back = (
+            value <= self._baseline + thr / 2
+            if self._active == SIGNAL_RISE
+            else value >= self._baseline - thr / 2
+        )
+        if not back and ts - self._active_since < MAX_ACTIVE:
+            return []
+        name = SIGNAL_RISE_END if self._active == SIGNAL_RISE else SIGNAL_FALL_END
+        minutes = round((ts - self._active_since) / 60, 1)
+        self._active = None
+        self._window.clear()
+        self._window.append((ts, value))
+        return [Signal(ts, name, minutes)]
 
-    Baseline = minimum of the last ``window_s`` before the jump.
-    End: value falls below baseline + step/2 (or after ``max_duration_s``).
+
+class CounterRate:
+    """Counter (kWh, m³, L …) → rate per hour.
+
+    Resets (daily counters, meter swaps) are ignored. When the counter does
+    not move for ``idle_s`` the rate drops to 0 (``tick``).
     """
 
-    def __init__(
-        self,
-        step: float = 1500.0,
-        window_s: float = 300,
-        max_duration_s: float = 4 * 3600,
-    ) -> None:
-        self.step = step
-        self.window_s = window_s
-        self.max_duration_s = max_duration_s
-        self._samples: deque[tuple[float, float]] = deque()
-        self._active_since: float | None = None
-        self._baseline = 0.0
+    def __init__(self, idle_s: float = 300) -> None:
+        self.idle_s = idle_s
+        self._last: tuple[float, float] | None = None
+        self._last_rate = 0.0
 
-    @property
-    def active(self) -> bool:
-        return self._active_since is not None
+    def update(self, ts: float, total: float) -> float | None:
+        if self._last is None:
+            self._last = (ts, total)
+            return None
+        last_ts, last_total = self._last
+        self._last = (ts, total)
+        delta = total - last_total
+        dt = ts - last_ts
+        if delta < 0 or dt <= 0:  # reset or clock issue
+            return None
+        rate = delta / dt * 3600
+        self._last_rate = rate
+        return rate
 
-    def update(self, ts: float, value: float) -> list[Signal]:
-        out: list[Signal] = []
-        if self._active_since is not None:
-            if (
-                value < self._baseline + self.step / 2
-                or ts - self._active_since >= self.max_duration_s
-            ):
-                minutes = round((ts - self._active_since) / 60, 1)
-                out.append(Signal(ts, SIGNAL_LOAD_END, minutes))
-                self._active_since = None
-                self._samples.clear()
-                self._samples.append((ts, value))
-            return out
-
-        while self._samples and ts - self._samples[0][0] > self.window_s:
-            self._samples.popleft()
-        if self._samples:
-            low = min(v for _, v in self._samples)
-            if value - low >= self.step:
-                self._baseline = low
-                self._active_since = ts
-                out.append(Signal(ts, SIGNAL_LOAD_START, round(value - low)))
-        self._samples.append((ts, value))
-        return out
-
-
-class WaterUseDetector:
-    """Water drawn: groups meter increases (or flow) into one usage.
-
-    Works with a total meter (litres, increasing) or with a flow sensor
-    (litres/min). A usage ends after ``gap_s`` without consumption; the
-    caller must call ``tick(ts)`` periodically (or when a timer fires).
-    One ``water_use`` signal is produced at the end, timestamped with the
-    start of the usage, if at least ``min_litres`` were used.
-    """
-
-    def __init__(self, min_litres: float = 3.0, gap_s: float = 180, flow: bool = False) -> None:
-        self.min_litres = min_litres
-        self.gap_s = gap_s
-        self.flow = flow
-        self._last_total: float | None = None
-        self._last_flow_ts: float | None = None
-        self._last_flow: float = 0.0
-        self._start: float | None = None
-        self._last_use: float = 0.0
-        self._litres = 0.0
-
-    @property
-    def active(self) -> bool:
-        return self._start is not None
-
-    def _use(self, ts: float, litres: float) -> None:
-        if litres <= 0:
-            return
-        if self._start is None:
-            self._start = ts
-            self._litres = 0.0
-        self._litres += litres
-        self._last_use = ts
-
-    def update(self, ts: float, value: float) -> list[Signal]:
-        out = self.tick(ts)
-        if self.flow:
-            # integrate previous flow (l/min) over elapsed time
-            if self._last_flow_ts is not None and self._last_flow > 0:
-                self._use(ts, self._last_flow * (ts - self._last_flow_ts) / 60)
-            if value > 0 and self._start is None:
-                self._start = ts
-                self._litres = 0.0
-            if value > 0:
-                self._last_use = ts
-            self._last_flow_ts = ts
-            self._last_flow = value
-            return out
-        if self._last_total is not None:
-            delta = value - self._last_total
-            if 0 < delta < 1000:  # ignore meter resets / jumps
-                self._use(ts, delta)
-        self._last_total = value
-        return out
-
-    def tick(self, ts: float) -> list[Signal]:
-        """Close the usage when nothing was used for ``gap_s``."""
-        if self._start is None:
-            return []
-        if self.flow and self._last_flow > 0:
-            return []
-        if ts - self._last_use < self.gap_s:
-            return []
-        start, litres = self._start, self._litres
-        self._start = None
-        self._litres = 0.0
-        if litres >= self.min_litres:
-            return [Signal(start, SIGNAL_WATER_USE, round(litres, 1))]
-        return []
+    def tick(self, ts: float) -> float | None:
+        """Return 0 once when the counter has been idle long enough."""
+        if self._last is None or self._last_rate == 0:
+            return None
+        if ts - self._last[0] >= self.idle_s:
+            self._last_rate = 0.0
+            return 0.0
+        return None
 
 
 # --- unit helpers --------------------------------------------------------------
 
 _POWER_FACTORS = {"W": 1.0, "kW": 1000.0, "MW": 1_000_000.0, "mW": 0.001}
-_VOLUME_FACTORS = {
-    "L": 1.0,
-    "l": 1.0,
-    "m³": 1000.0,
-    "m3": 1000.0,
-    "gal": 3.78541,
-    "ft³": 28.3168,
-    "CCF": 2831.68,
-    "mL": 0.001,
-}
-_FLOW_FACTORS = {  # -> l/min
-    "L/min": 1.0,
-    "l/min": 1.0,
-    "L/h": 1 / 60,
-    "m³/h": 1000 / 60,
-    "m³/min": 1000.0,
-    "m³/s": 60000.0,
-    "gal/min": 3.78541,
-    "ft³/min": 28.3168,
-    "mL/s": 0.06,
-}
 
 
-def to_watts(value: float, unit: str | None) -> float | None:
-    factor = _POWER_FACTORS.get(unit or "W")
-    return None if factor is None else value * factor
-
-
-def to_litres(value: float, unit: str | None) -> float | None:
-    factor = _VOLUME_FACTORS.get(unit or "L")
-    return None if factor is None else value * factor
-
-
-def to_litres_per_min(value: float, unit: str | None) -> float | None:
-    factor = _FLOW_FACTORS.get(unit or "L/min")
-    return None if factor is None else value * factor
-
-
-def is_flow_unit(unit: str | None) -> bool:
-    return unit in _FLOW_FACTORS
+def normalize(device_class: str | None, value: float, unit: str | None) -> float | None:
+    """Convert to the unit the floors use (power → W)."""
+    if device_class == "power":
+        factor = _POWER_FACTORS.get(unit or "W")
+        return None if factor is None else value * factor
+    return value

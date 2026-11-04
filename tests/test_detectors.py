@@ -1,94 +1,112 @@
 """Detector tests (pure Python)."""
 
 from custom_components.pattern_pilot.detectors import (
-    HumidityRiseDetector,
-    PowerStepDetector,
-    WaterUseDetector,
-    to_litres,
-    to_watts,
+    LEARN_SECONDS,
+    ChangeDetector,
+    CounterRate,
+    normalize,
 )
 
+DAY = LEARN_SECONDS
 
-def test_shower_detected_and_ended():
-    det = HumidityRiseDetector(rise=8)
-    t = 0.0
+
+def _learned(floor=1e-6, sensitivity="medium", noise=0.5):
+    """Detector that already learned a normal 10-min range of ``noise``."""
+    return ChangeDetector(
+        floor=floor,
+        sensitivity=sensitivity,
+        profile={"first_ts": 0.0, "ranges": [noise] * 200},
+    )
+
+
+def test_nothing_before_learning():
+    det = ChangeDetector(floor=4)
     out = []
-    for v in (55, 55, 56, 60, 66, 72, 75):  # fast rise
+    for i, v in enumerate((50, 50, 70, 80)):
+        out += det.update(i * 60.0, v)
+    assert out == []
+
+
+def test_learning_from_live_values():
+    det = ChangeDetector(floor=1e-6)
+    t = 0.0
+    # one day of small noise, one sample per 2 minutes
+    while t < DAY + 600:
+        det.update(t, 50 + (0.3 if int(t / 120) % 2 else 0))
+        t += 120
+    assert det.is_ready(t)
+    assert 1.4 <= det.threshold <= 1.6  # 5 × 0.3
+
+
+def test_rise_and_end():
+    det = _learned(floor=4)  # humidity floor dominates (5 × 0.5 = 2.5)
+    t = DAY + 1000
+    out = []
+    for v in (55, 55, 56, 60, 66, 72, 75):
         out += det.update(t, v)
         t += 60
-    assert [s.name for s in out] == ["shower_start"]
-    assert out[0].value >= 8
-    for v in (74, 70, 65, 60, 58):
+    assert [s.name for s in out] == ["rise"]
+    for v in (74, 70, 65, 60, 57):
         out += det.update(t, v)
         t += 120
-    assert [s.name for s in out] == ["shower_start", "shower_end"]
+    assert [s.name for s in out] == ["rise", "rise_end"]
 
 
-def test_slow_humidity_drift_is_not_shower():
-    det = HumidityRiseDetector(rise=8, window_s=600)
+def test_fall():
+    det = _learned(floor=1.0, noise=0.1)
+    t = DAY + 1000
     out = []
-    for i in range(60):  # +0.5 % every 2 min = 15 % in 2 h
-        out += det.update(i * 120.0, 50 + i * 0.5)
-    assert out == []
-
-
-def test_power_step():
-    det = PowerStepDetector(step=1500)
-    out = []
-    t = 0.0
-    for v in (300, 320, 310, 2300, 2350, 2290, 400, 350):
+    for v in (22.0, 22.0, 21.5, 20.5, 19.5):
         out += det.update(t, v)
+        t += 60
+    assert [s.name for s in out] == ["fall"]
+
+
+def test_noise_ignored_and_sensitivity():
+    out = []
+    det = _learned(noise=200)  # power sensor with ±200 W normal swings
+    t = DAY + 1000
+    for i in range(200):
+        out += det.update(t, 500 + (i % 3) * 100)
+        t += 10
+    assert out == []
+    assert _learned(noise=200, sensitivity="high").threshold < det.threshold
+    assert _learned(noise=200, sensitivity="low").threshold > det.threshold
+
+
+def test_profile_roundtrip():
+    det = _learned()
+    clone = ChangeDetector(profile=det.profile())
+    assert clone.threshold == det.threshold
+    assert clone.is_ready(DAY + 1)
+
+
+def test_counter_rate():
+    rate = CounterRate(idle_s=300)
+    assert rate.update(0, 100.0) is None
+    assert abs(rate.update(60, 100.1) - 6.0) < 1e-6  # 0.1 per minute = 6 per hour
+    assert rate.tick(200) is None
+    assert rate.tick(400) == 0.0
+    assert rate.tick(500) is None  # only once
+    assert rate.update(600, 0.2) is None  # daily reset ignored
+
+
+def test_counter_rate_into_detector():
+    rate = CounterRate(idle_s=300)
+    det = _learned(noise=0.0)
+    out = []
+    t = DAY + 1000
+    rate.update(t, 10.0)
+    det.update(t, 0.0)  # idle before (rate dropped to 0 earlier)
+    for _ in range(3):  # water starts flowing
         t += 30
-    names = [s.name for s in out]
-    assert names == ["load_start", "load_end"]
-    assert out[0].value == 2000
+        out += det.update(t, rate.update(t, 10.0 + (t - DAY - 1000) / 600))
+    t += 400
+    out += det.update(t, rate.tick(t))
+    assert [s.name for s in out] == ["rise", "rise_end"]
 
 
-def test_power_noise_ignored():
-    det = PowerStepDetector(step=1500)
-    out = []
-    for i in range(100):
-        out += det.update(i * 10.0, 400 + (i % 5) * 100)
-    assert out == []
-
-
-def test_water_total_meter():
-    det = WaterUseDetector(min_litres=3, gap_s=180)
-    out = []
-    total = 1000.0
-    out += det.update(0, total)
-    for t in (60, 90, 120):
-        total += 2.0
-        out += det.update(t, total)
-    assert out == []
-    out += det.tick(200)
-    assert out == []
-    out += det.tick(400)
-    assert len(out) == 1
-    assert out[0].name == "water_use"
-    assert out[0].ts == 60
-    assert out[0].value == 6.0
-
-
-def test_water_small_use_dropped():
-    det = WaterUseDetector(min_litres=3, gap_s=180)
-    det.update(0, 10.0)
-    det.update(30, 11.0)
-    assert det.tick(1000) == []
-
-
-def test_water_flow():
-    det = WaterUseDetector(min_litres=3, gap_s=60, flow=True)
-    out = []
-    out += det.update(0, 6.0)  # 6 l/min
-    out += det.update(60, 6.0)
-    out += det.update(120, 0.0)
-    out += det.tick(500)
-    assert len(out) == 1
-    assert out[0].value == 12.0
-
-
-def test_units():
-    assert to_watts(2.5, "kW") == 2500
-    assert to_litres(1.5, "m³") == 1500
-    assert to_watts(1, "unknown") is None
+def test_normalize():
+    assert normalize("power", 2.5, "kW") == 2500
+    assert normalize("power", 1, "unknown") is None
+    assert normalize("humidity", 55, "%") == 55

@@ -6,19 +6,21 @@
     "step": {
       "user": {
         "title": "Vitaj v Pattern Pilot",
-        "description": "Pattern Pilot sleduje, čo ľudia v dome robia ručne, učí sa rutiny a neskôr navrhne automatizácie. Všetko ostáva doma.\n\nTáto verzia zatiaľ len zbiera dáta. Na návrhy treba asi 3 týždne histórie.",
+        "description": "Pattern Pilot sleduje, čo ľudia v dome robia ručne, učí sa rutiny a neskôr navrhne automatizácie. Všetko ostáva doma a nič netreba nastavovať ručne: senzory, počítadlá z Energy panelu, sviatky, slnko a počasie sa použijú automaticky.\n\nTáto verzia zatiaľ len zbiera dáta. Na návrhy treba asi 3 týždne histórie.",
         "data": {
           "history_days": "Uchovávať históriu",
-          "analysis_time": "Nočná analýza o"
+          "analysis_time": "Nočná analýza o",
+          "sensitivity": "Citlivosť na zmeny senzorov"
         },
         "data_description": {
           "history_days": "Pattern Pilot má vlastnú históriu, nezávislú od recordera.",
-          "analysis_time": "Údržba a (neskôr) analýza bežia raz denne v tomto čase."
+          "analysis_time": "Údržba a (neskôr) analýza bežia raz denne v tomto čase.",
+          "sensitivity": "Aká veľká musí byť náhla zmena senzora, aby sa rátala ako udalosť. Každý senzor sa prvý deň učí svoje bežné kolísanie."
         }
       },
       "tracking": {
         "title": "Čo sledovať",
-        "description": "Vyber, ktoré entity Pattern Pilot sleduje. Konfiguračné a diagnostické entity vynecháva vždy.",
+        "description": "Predvolene celý dom. Konfiguračné a diagnostické entity sa vynechávajú vždy.",
         "data": {
           "domains": "Domény",
           "areas": "Len tieto miestnosti",
@@ -26,29 +28,9 @@
           "exclude_users": "Nie je človek (Node-RED, AppDaemon, …)"
         },
         "data_description": {
+          "domains": "„sensor“ = merané hodnoty (vlhkosť, teplota, výkon, svetlo, CO₂ …) a počítadlá z Energy panelu – ukladajú sa len náhle nárasty a poklesy.",
           "areas": "Prázdne = celý dom. Osoby sa sledujú vždy.",
           "exclude_users": "Akcie týchto používateľov sa nepočítajú ako ručné."
-        }
-      },
-      "signals": {
-        "title": "Signály v dome",
-        "description": "Senzory, z ktorých sa dá vyčítať, čo sa deje: sprcha (stúpne vlhkosť), spotrebič (skočí odber), odber vody. Ukladajú sa len zistené udalosti, nie surové hodnoty.",
-        "data": {
-          "humidity_sensors": "Senzory vlhkosti v kúpeľni",
-          "humidity_rise": "Sprcha = nárast vlhkosti aspoň o",
-          "power_sensors": "Senzory výkonu (dom, zásuvky)",
-          "power_step": "Spotrebič = skok odberu aspoň o",
-          "water_sensors": "Vodomer alebo prietokomer",
-          "water_min": "Odber vody počítať od"
-        }
-      },
-      "context": {
-        "title": "Súvislosti",
-        "description": "Tieto hodnoty sa uložia pri každej ručnej akcii, aby sa neskôr dali nájsť podmienky (len v pracovné dni, len keď je tma …).",
-        "data": {
-          "workday_sensor": "Senzor pracovného dňa",
-          "lux_sensor": "Senzor osvetlenia",
-          "temperature_sensor": "Vonkajšia teplota (senzor alebo počasie)"
         }
       }
     }
@@ -59,8 +41,6 @@
         "title": "Pattern Pilot",
         "menu_options": {
           "tracking": "Čo sledovať",
-          "signals": "Signály v dome",
-          "context": "Súvislosti",
           "analysis": "História a analýza"
         }
       },
@@ -73,35 +53,32 @@
           "exclude_users": "Nie je človek (Node-RED, AppDaemon, …)"
         },
         "data_description": {
+          "domains": "„sensor“ = merané hodnoty (vlhkosť, teplota, výkon, svetlo, CO₂ …) a počítadlá z Energy panelu – ukladajú sa len náhle nárasty a poklesy.",
           "areas": "Prázdne = celý dom. Osoby sa sledujú vždy.",
           "exclude_users": "Akcie týchto používateľov sa nepočítajú ako ručné."
-        }
-      },
-      "signals": {
-        "title": "Signály v dome",
-        "data": {
-          "humidity_sensors": "Senzory vlhkosti v kúpeľni",
-          "humidity_rise": "Sprcha = nárast vlhkosti aspoň o",
-          "power_sensors": "Senzory výkonu (dom, zásuvky)",
-          "power_step": "Spotrebič = skok odberu aspoň o",
-          "water_sensors": "Vodomer alebo prietokomer",
-          "water_min": "Odber vody počítať od"
-        }
-      },
-      "context": {
-        "title": "Súvislosti",
-        "data": {
-          "workday_sensor": "Senzor pracovného dňa",
-          "lux_sensor": "Senzor osvetlenia",
-          "temperature_sensor": "Vonkajšia teplota (senzor alebo počasie)"
         }
       },
       "analysis": {
         "title": "História a analýza",
         "data": {
           "history_days": "Uchovávať históriu",
-          "analysis_time": "Nočná analýza o"
+          "analysis_time": "Nočná analýza o",
+          "sensitivity": "Citlivosť na zmeny senzorov"
+        },
+        "data_description": {
+          "history_days": "Pattern Pilot má vlastnú históriu, nezávislú od recordera.",
+          "analysis_time": "Údržba a (neskôr) analýza bežia raz denne v tomto čase.",
+          "sensitivity": "Aká veľká musí byť náhla zmena senzora, aby sa rátala ako udalosť. Každý senzor sa prvý deň učí svoje bežné kolísanie."
         }
+      }
+    }
+  },
+  "selector": {
+    "sensitivity": {
+      "options": {
+        "low": "Nízka – len veľké zmeny",
+        "medium": "Stredná",
+        "high": "Vysoká – aj menšie zmeny"
       }
     }
   },
@@ -114,11 +91,21 @@
           "ready": "Pripravený"
         }
       },
-      "days_of_data": { "name": "Dni dát" },
-      "events": { "name": "Zaznamenané udalosti" },
-      "events_today": { "name": "Udalosti dnes" },
-      "manual_actions_today": { "name": "Ručné akcie dnes" },
-      "database_size": { "name": "Veľkosť databázy" }
+      "days_of_data": {
+        "name": "Dni dát"
+      },
+      "events": {
+        "name": "Zaznamenané udalosti"
+      },
+      "events_today": {
+        "name": "Udalosti dnes"
+      },
+      "manual_actions_today": {
+        "name": "Ručné akcie dnes"
+      },
+      "database_size": {
+        "name": "Veľkosť databázy"
+      }
     }
   }
 }

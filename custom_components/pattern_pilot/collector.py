@@ -23,7 +23,6 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTION_DOMAINS,
@@ -38,19 +37,9 @@ from .const import (
     CONF_DOMAINS,
     CONF_EXCLUDE_ENTITIES,
     CONF_EXCLUDE_USERS,
-    CONF_HUMIDITY_RISE,
-    CONF_HUMIDITY_SENSORS,
-    CONF_LUX_SENSOR,
-    CONF_POWER_SENSORS,
-    CONF_POWER_STEP,
-    CONF_TEMP_SENSOR,
-    CONF_WATER_MIN,
-    CONF_WATER_SENSORS,
-    CONF_WORKDAY_SENSOR,
+    CONF_SENSITIVITY,
     DEFAULT_DOMAINS,
-    DEFAULT_HUMIDITY_RISE,
-    DEFAULT_POWER_STEP,
-    DEFAULT_WATER_MIN,
+    DEFAULT_SENSITIVITY,
     DOMAIN,
     FLUSH_INTERVAL_S,
     KIND_ATTRIBUTE,
@@ -58,19 +47,12 @@ from .const import (
     KIND_SIGNAL,
     KIND_STATE,
     MANUAL_ACTORS,
+    MEASURE_DEVICE_CLASSES,
     OVERRIDE_WINDOW_S,
     TRACKED_ATTRIBUTES,
 )
-from .detectors import (
-    HumidityRiseDetector,
-    PowerStepDetector,
-    Signal,
-    WaterUseDetector,
-    is_flow_unit,
-    to_litres,
-    to_litres_per_min,
-    to_watts,
-)
+from .context import ContextProvider
+from .detectors import FLOORS, ChangeDetector, CounterRate, Signal, normalize
 from .store import EventRow, EventStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,20 +87,17 @@ class Collector:
         self.areas: set[str] = set(opts.get(CONF_AREAS) or [])
         self.exclude_entities: set[str] = set(opts.get(CONF_EXCLUDE_ENTITIES) or [])
         self.exclude_users: set[str] = set(opts.get(CONF_EXCLUDE_USERS) or [])
-        self.humidity_sensors: set[str] = set(opts.get(CONF_HUMIDITY_SENSORS) or [])
-        self.power_sensors: set[str] = set(opts.get(CONF_POWER_SENSORS) or [])
-        self.water_sensors: set[str] = set(opts.get(CONF_WATER_SENSORS) or [])
-        self.humidity_rise = float(opts.get(CONF_HUMIDITY_RISE, DEFAULT_HUMIDITY_RISE))
-        self.power_step = float(opts.get(CONF_POWER_STEP, DEFAULT_POWER_STEP))
-        self.water_min = float(opts.get(CONF_WATER_MIN, DEFAULT_WATER_MIN))
-        self.workday_sensor: str | None = opts.get(CONF_WORKDAY_SENSOR) or None
-        self.lux_sensor: str | None = opts.get(CONF_LUX_SENSOR) or None
-        self.temp_sensor: str | None = opts.get(CONF_TEMP_SENSOR) or None
+        self.sensitivity: str = opts.get(CONF_SENSITIVITY, DEFAULT_SENSITIVITY)
+        self.counters: set[str] = set()
+        self.context = ContextProvider(hass)
 
         self._buffer: list[EventRow] = []
         self._contexts: OrderedDict[str, str] = OrderedDict()
         self._last_auto: dict[str, tuple[float, str, str]] = {}
-        self._detectors: dict[str, Any] = {}
+        self._detectors: dict[str, ChangeDetector] = {}
+        self._rates: dict[str, CounterRate] = {}
+        self._sensor_kind: dict[str, str | None] = {}
+        self._profiles: dict[str, dict] = {}
         self._tracked_cache: dict[str, tuple[bool, str | None]] = {}
         self._unsubs: list[Callable[[], None]] = []
         self.captured = 0
@@ -126,6 +105,9 @@ class Collector:
 
     # -- lifecycle -------------------------------------------------------------
     async def async_start(self) -> None:
+        self._profiles = await self.hass.async_add_executor_job(self.store.load_profiles)
+        self.counters = await _energy_counters(self.hass)
+        await self.context.async_prepare()
         bus = self.hass.bus
         self._unsubs += [
             bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed),
@@ -144,6 +126,22 @@ class Collector:
             unsub()
         self._unsubs.clear()
         await self.async_flush()
+        await self.async_save_profiles()
+
+    async def async_save_profiles(self) -> None:
+        profiles = {eid: det.profile() for eid, det in self._detectors.items()}
+        if not profiles:
+            return
+        try:
+            await self.hass.async_add_executor_job(self.store.save_profiles, profiles)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Pattern Pilot: saving detector profiles failed")
+
+    async def async_refresh(self) -> None:
+        """Nightly: reload Energy panel counters, holidays, weather entity."""
+        self.counters = await _energy_counters(self.hass)
+        self._sensor_kind.clear()
+        await self.context.async_prepare()
 
     async def async_flush(self) -> int:
         self._tick_detectors(time.time())
@@ -165,6 +163,7 @@ class Collector:
     @callback
     def _on_registry(self, _event: Event) -> None:
         self._tracked_cache.clear()
+        self._sensor_kind.clear()
 
     # -- filtering ---------------------------------------------------------------
     def _lookup(self, entity_id: str, domain: str) -> tuple[bool, str | None]:
@@ -214,37 +213,6 @@ class Collector:
             return ACTOR_PHYSICAL, None, None
         return ACTOR_DEVICE, None, None
 
-    # -- context snapshot --------------------------------------------------------
-    def _snapshot(self) -> dict[str, Any]:
-        states = self.hass.states
-        now = dt_util.now()
-        day_type = "weekend" if now.weekday() >= 5 else "workday"
-        if self.workday_sensor and (st := states.get(self.workday_sensor)):
-            if st.state == "on":
-                day_type = "workday"
-            elif st.state == "off":
-                day_type = "weekend" if now.weekday() >= 5 else "holiday"
-        sun = None
-        if st := states.get("sun.sun"):
-            sun = "day" if st.state == "above_horizon" else "night"
-        lux = None
-        if self.lux_sensor and (st := states.get(self.lux_sensor)):
-            lux = _float(st.state)
-        temperature = None
-        if self.temp_sensor and (st := states.get(self.temp_sensor)):
-            if st.domain == "weather":
-                temperature = _float(st.attributes.get("temperature"))
-            else:
-                temperature = _float(st.state)
-        people = sum(1 for p in states.async_all("person") if p.state == "home")
-        return {
-            "day_type": day_type,
-            "sun": sun,
-            "lux": lux,
-            "temperature": temperature,
-            "people_home": people,
-        }
-
     # -- event handlers ------------------------------------------------------------
     @callback
     def _on_run(self, event: Event) -> None:
@@ -287,16 +255,11 @@ class Collector:
             return
         ts = new.last_updated.timestamp()
 
-        if (
-            entity_id in self.humidity_sensors
-            or entity_id in self.power_sensors
-            or entity_id in self.water_sensors
-        ):
-            self._feed_detector(entity_id, new, ts)
-            return
-
         domain = new.domain
         if domain not in self.domains:
+            return
+        if domain == "sensor":
+            self._feed_sensor(entity_id, new, ts)
             return
         tracked, area = self._lookup(entity_id, domain)
         if not tracked:
@@ -404,40 +367,67 @@ class Collector:
                 ref=ref,
                 override=override,
                 context_id=state.context.id,
-                context=self._snapshot() if actor in MANUAL_ACTORS else None,
+                context=self.context.snapshot() if actor in MANUAL_ACTORS else None,
             )
         )
 
-    # -- detectors -------------------------------------------------------------------
-    def _feed_detector(self, entity_id: str, state: State, ts: float) -> None:
+    # -- sensors → rise / fall events ---------------------------------------------------
+    def _classify(self, entity_id: str, state: State) -> str | None:
+        """'counter', 'measure' or None (cached)."""
+        if entity_id in self._sensor_kind:
+            return self._sensor_kind[entity_id]
+        kind: str | None = None
+        tracked, _area = self._lookup(entity_id, "sensor")
+        if entity_id in self.counters:
+            if entity_id not in self.exclude_entities:
+                kind = "counter"
+        elif tracked:
+            attrs = state.attributes
+            if (
+                attrs.get("state_class") == "measurement"
+                and attrs.get("device_class") in MEASURE_DEVICE_CLASSES
+            ):
+                kind = "measure"
+        self._sensor_kind[entity_id] = kind
+        return kind
+
+    def _feed_sensor(self, entity_id: str, state: State, ts: float) -> None:
+        kind = self._classify(entity_id, state)
+        if kind is None:
+            return
         raw = _float(state.state)
         if raw is None:
             return
-        unit = state.attributes.get("unit_of_measurement")
-        det = self._detectors.get(entity_id)
-        value: float | None
-        if entity_id in self.humidity_sensors:
-            det = det or HumidityRiseDetector(rise=self.humidity_rise)
-            value = raw
-        elif entity_id in self.power_sensors:
-            det = det or PowerStepDetector(step=self.power_step)
-            value = to_watts(raw, unit)
-        else:
-            flow = is_flow_unit(unit)
-            if det is None or det.flow != flow:
-                det = WaterUseDetector(min_litres=self.water_min, flow=flow)
-            value = to_litres_per_min(raw, unit) if flow else to_litres(raw, unit)
-        self._detectors[entity_id] = det
+        device_class = state.attributes.get("device_class")
+        if kind == "counter":
+            rate = self._rates.setdefault(entity_id, CounterRate()).update(ts, raw)
+            if rate is None:
+                return
+            self._emit(entity_id, "counter", self._detector(entity_id, None).update(ts, rate))
+            return
+        value = normalize(device_class, raw, state.attributes.get("unit_of_measurement"))
         if value is None:
             return
-        self._emit(entity_id, det.update(ts, value))
+        self._emit(entity_id, device_class, self._detector(entity_id, device_class).update(ts, value))
+
+    def _detector(self, entity_id: str, device_class: str | None) -> ChangeDetector:
+        det = self._detectors.get(entity_id)
+        if det is None:
+            det = ChangeDetector(
+                floor=FLOORS.get(device_class or "", 1e-6),
+                sensitivity=self.sensitivity,
+                profile=self._profiles.pop(entity_id, None),
+            )
+            self._detectors[entity_id] = det
+        return det
 
     def _tick_detectors(self, ts: float) -> None:
-        for entity_id, det in self._detectors.items():
-            if isinstance(det, WaterUseDetector):
-                self._emit(entity_id, det.tick(ts))
+        for entity_id, rate in self._rates.items():
+            zero = rate.tick(ts)
+            if zero is not None and entity_id in self._detectors:
+                self._emit(entity_id, "counter", self._detectors[entity_id].update(ts, zero))
 
-    def _emit(self, entity_id: str, signals: list[Signal]) -> None:
+    def _emit(self, entity_id: str, source: str | None, signals: list[Signal]) -> None:
         if not signals:
             return
         _, area = self._lookup(entity_id, "sensor")
@@ -449,7 +439,7 @@ class Collector:
                     domain="sensor",
                     area=area,
                     kind=KIND_SIGNAL,
-                    old=None,
+                    old=source,
                     new=sig.name,
                     value=sig.value,
                     actor=ACTOR_DEVICE,
@@ -471,10 +461,44 @@ class Collector:
                 (a.name if (a := area_reg.async_get_area(area_id)) else area_id)
                 for area_id in sorted(self.areas)
             ],
-            "detectors": {
-                eid: type(det).__name__ for eid, det in self._detectors.items()
-            },
+            "sensitivity": self.sensitivity,
+            "energy_counters": sorted(self.counters),
+            "sensors_watched": len(self._detectors),
+            "sensors_ready": sum(
+                1 for det in self._detectors.values() if det.is_ready(time.time())
+            ),
+            "context": self.context.describe(),
             "buffered": len(self._buffer),
             "captured_since_start": self.captured,
             "manual_since_start": self.manual_captured,
         }
+
+
+async def _energy_counters(hass: HomeAssistant) -> set[str]:
+    """Counters configured in the Energy dashboard (grid, solar, battery, gas, water, devices)."""
+    try:
+        from homeassistant.components.energy.data import (  # noqa: PLC0415
+            async_get_manager,
+        )
+
+        manager = await async_get_manager(hass)
+        data = manager.data or {}
+    except Exception:  # noqa: BLE001 - energy not set up
+        return set()
+    found: set[str] = set()
+    skip = ("stat_cost", "stat_compensation", "stat_rate")
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if isinstance(value, str):
+                    if key.startswith("stat_") and key not in skip and "." in value and ":" not in value:
+                        found.add(value)
+                else:
+                    walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(data)
+    return found

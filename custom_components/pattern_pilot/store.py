@@ -7,6 +7,7 @@ single connection safe for HA's executor threads.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 import sqlite3
 import threading
@@ -44,7 +45,13 @@ CREATE TABLE IF NOT EXISTS context (
     sun TEXT,
     lux REAL,
     temperature REAL,
-    people_home INTEGER
+    people_home INTEGER,
+    sun_elevation REAL
+);
+CREATE TABLE IF NOT EXISTS profiles (
+    entity_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated REAL NOT NULL
 );
 """
 
@@ -107,8 +114,21 @@ class EventStore:
                     "INSERT INTO meta (key, value) VALUES ('schema', ?), ('created', ?)",
                     (str(SCHEMA_VERSION), str(time.time())),
                 )
+            else:
+                self._migrate(conn, int(row[0]))
             conn.commit()
             self._conn = conn
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection, version: int) -> None:
+        if version < 2:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(context)")}
+            if "sun_elevation" not in cols:
+                conn.execute("ALTER TABLE context ADD COLUMN sun_elevation REAL")
+        if version < SCHEMA_VERSION:
+            conn.execute(
+                "UPDATE meta SET value=? WHERE key='schema'", (str(SCHEMA_VERSION),)
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -152,8 +172,8 @@ class EventStore:
                 if r.context:
                     c = r.context
                     cur.execute(
-                        "INSERT INTO context (event_id, day_type, sun, lux, temperature, people_home)"
-                        " VALUES (?,?,?,?,?,?)",
+                        "INSERT INTO context (event_id, day_type, sun, lux, temperature,"
+                        " people_home, sun_elevation) VALUES (?,?,?,?,?,?,?)",
                         (
                             cur.lastrowid,
                             c.get("day_type"),
@@ -161,10 +181,37 @@ class EventStore:
                             c.get("lux"),
                             c.get("temperature"),
                             c.get("people_home"),
+                            c.get("sun_elevation"),
                         ),
                     )
             self.conn.commit()
         return len(rows)
+
+    # -- detector profiles (learned normal variation) ------------------------------
+    def load_profiles(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self.conn.execute("SELECT entity_id, data FROM profiles").fetchall()
+        out: dict[str, dict] = {}
+        for entity_id, data in rows:
+            try:
+                out[entity_id] = json.loads(data)
+            except ValueError:
+                continue
+        return out
+
+    def save_profiles(self, profiles: dict[str, dict]) -> None:
+        if not profiles:
+            return
+        now = time.time()
+        with self._lock:
+            self.conn.executemany(
+                "INSERT INTO profiles (entity_id, data, updated) VALUES (?,?,?)"
+                " ON CONFLICT(entity_id) DO UPDATE SET data=excluded.data, updated=excluded.updated",
+                [(eid, json.dumps(p), now) for eid, p in profiles.items()],
+            )
+            # profiles of sensors not seen for 30 days
+            self.conn.execute("DELETE FROM profiles WHERE updated < ?", (now - 30 * 86400,))
+            self.conn.commit()
 
     # -- maintenance -----------------------------------------------------------
     def purge(self, keep_days: int, now: float | None = None) -> int:
