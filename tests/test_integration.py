@@ -363,3 +363,74 @@ async def test_area_target_resolved(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     rows = [r for r in await _rows(hass, entry) if r["entity_id"] == ent.entity_id]
     assert [(r["new"], r["actor"]) for r in rows] == [("on", "human")]
+
+
+async def test_zigbee2mqtt_group_members(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    entry = await _setup(hass, domains=["light"])
+    mqtt_entry = MockConfigEntry(domain="mqtt", data={})
+    mqtt_entry.add_to_hass(hass)
+    dev_reg, ent_reg = dr.async_get(hass), er.async_get(hass)
+    devices = {
+        name: dev_reg.async_get_or_create(
+            config_entry_id=mqtt_entry.entry_id, identifiers={("mqtt", ident)}, name=name
+        )
+        for name, ident in (
+            ("bulb1", "zigbee2mqtt_0xAAA1"),
+            ("bulb2", "zigbee2mqtt_0xaaa2"),
+            ("group", "zigbee2mqtt_1221051039810110150109113116116_7"),
+        )
+    }
+    ids = {
+        name: ent_reg.async_get_or_create(
+            "light", "mqtt", f"u_{name}", device_id=dev.id, suggested_object_id=f"zahrada_{name}"
+        ).entity_id
+        for name, dev in devices.items()
+    }
+    collector = entry.runtime_data.collector
+    collector.groups.set_z2m_groups(
+        "zigbee2mqtt",
+        [{"id": 7, "friendly_name": "Záhrada vchod", "members": [
+            {"ieee_address": "0xaaa1", "endpoint": 1}, {"ieee_address": "0xAAA2", "endpoint": 1}]}],
+    )
+    assert collector.groups.expand(ids["group"]) == {ids["bulb1"], ids["bulb2"]}
+
+    for name in ("bulb1", "bulb2"):
+        hass.states.async_set(ids[name], "off")
+    await hass.async_block_till_done()
+    run_ctx = Context(parent_id="trigger")
+    hass.bus.async_fire(
+        "automation_triggered",
+        {"entity_id": "automation.zahrada_vchod_pohyb", "name": "x", "source": "motion"},
+        context=run_ctx,
+    )
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_on", "service_data": {"entity_id": ids["group"]}},
+        context=run_ctx,
+    )
+    await hass.async_block_till_done()
+    for name in ("bulb1", "bulb2"):
+        hass.states.async_set(ids[name], "on", context=Context())  # members report via MQTT
+    await hass.async_block_till_done()
+    rows = await _rows(hass, entry)
+    bulbs = [(r["entity_id"], r["actor"]) for r in rows if r["entity_id"] in (ids["bulb1"], ids["bulb2"])]
+    assert bulbs == [(ids["bulb1"], "automation"), (ids["bulb2"], "automation")]
+
+
+async def test_ha_group_members(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["light"])
+    hass.states.async_set("light.skupina", "off", {"entity_id": ["light.a", "light.b"]})
+    hass.states.async_set("light.a", "off")
+    await hass.async_block_till_done()
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_on", "service_data": {"entity_id": "light.skupina"}},
+        context=Context(user_id="igor"),
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set("light.a", "on", context=Context())
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == "light.a"]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "human")]

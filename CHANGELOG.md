@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4] – 2026-11-05
+
+- **Group members.** A command to a **Zigbee2MQTT group** now counts for its member devices too –
+  members report their new state separately and used to look like a change outside HA. Groups are
+  read from `zigbee2mqtt/bridge/groups` (any base topic) and matched to HA devices automatically.
+  Home Assistant groups (light / switch / cover groups, scenes) are expanded the same way.
+- **About 60 % smaller database.** Entity ids are stored once, unused columns and one index are gone.
+  Existing data is converted automatically on the first start (takes a few seconds).
+  With ~10 000 events a day, 120 days of history now take roughly 120 MB instead of 300+ MB.
+- Weekly maintenance also shrinks the write-ahead log.
+- Diagnostics: entities that produced the most events in the last 24 h, mapped Zigbee2MQTT groups.
+
 ## [0.1.3] – 2026-11-04
 
 More accurate "who did it":

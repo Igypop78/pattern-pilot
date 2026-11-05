@@ -91,29 +91,69 @@ def test_migrate_schema_1(tmp_path):
     store.open()
     cols = {r[1] for r in store.conn.execute("PRAGMA table_info(context)")}
     assert "sun_elevation" in cols
-    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "3"
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "4"
     store.write([_row(time.time(), context={"day_type": "holiday", "sun_elevation": 12.5})])
     assert store.conn.execute("SELECT sun_elevation FROM context").fetchone()[0] == 12.5
     store.close()
 
 
-def test_migrate_to_3_reclassifies_device_programs(tmp_path):
+LEGACY_V3 = """
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+INSERT INTO meta VALUES ('schema', '2');
+CREATE TABLE events (id INTEGER PRIMARY KEY, ts REAL NOT NULL, entity_id TEXT NOT NULL,
+    domain TEXT NOT NULL, area TEXT, kind TEXT NOT NULL, old TEXT, new TEXT, value REAL,
+    actor TEXT NOT NULL, user_id TEXT, ref TEXT, override INTEGER NOT NULL DEFAULT 0, context_id TEXT);
+CREATE INDEX ix_events_ts ON events (ts);
+CREATE INDEX ix_events_entity_ts ON events (entity_id, ts);
+CREATE INDEX ix_events_actor_ts ON events (actor, ts);
+CREATE TABLE context (event_id INTEGER PRIMARY KEY REFERENCES events (id) ON DELETE CASCADE,
+    day_type TEXT, sun TEXT, lux REAL, temperature REAL, people_home INTEGER, sun_elevation REAL);
+CREATE TABLE profiles (entity_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated REAL NOT NULL);
+INSERT INTO events (id, ts, entity_id, domain, area, kind, old, new, value, actor, context_id)
+    VALUES (1, 100, 'light.a', 'light', 'kitchen', 'state', 'off', 'on', NULL, 'physical', 'c1'),
+           (2, 200, 'climate.trv', 'climate', 'office', 'attr', 'temperature:20', 'temperature:17', 17, 'physical', 'c2'),
+           (3, 300, 'light.a', 'light', 'kitchen', 'state', 'on', 'off', NULL, 'human', 'c3');
+INSERT INTO context (event_id, day_type) VALUES (1, 'workday'), (2, 'workday'), (3, 'weekend');
+"""
+
+
+def test_migrate_legacy_to_compact(tmp_path):
     import sqlite3
 
     path = str(tmp_path / "pp.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(LEGACY_V3)
+    conn.commit()
+    conn.close()
     store = EventStore(path)
     store.open()
-    rows = [_row(time.time()), _row(time.time())]
-    rows[1].entity_id, rows[1].domain, rows[1].actor = "climate.trv", "climate", "physical"
-    rows[1].context = {"day_type": "workday"}
-    rows[0].actor = "physical"
-    store.write(rows)
-    store.conn.execute("UPDATE meta SET value='2' WHERE key='schema'")
-    store.conn.commit()
+    rows = store.recent(10)
+    assert [(r["entity_id"], r["domain"], r["actor"]) for r in rows] == [
+        ("light.a", "light", "human"),
+        ("climate.trv", "climate", "device"),
+        ("light.a", "light", "physical"),
+    ]
+    assert "entity_id" not in {r[1] for r in store.conn.execute("PRAGMA table_info(events)")}
+    assert store.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 2
+    assert sorted(r[0] for r in store.conn.execute("SELECT event_id FROM context")) == [1, 3]
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "4"
+    # new writes reuse the entity numbers
+    store.write([_row(400)])
+    assert store.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 3
+    store.write([_row(500)])
+    assert store.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 3
+    top = store.top_entities(0)
+    assert top[0]["entity_id"] == "light.a" and top[0]["events"] == 2
     store.close()
-    store = EventStore(path)
+
+
+def test_area_update(tmp_path):
+    store = EventStore(str(tmp_path / "pp.db"))
     store.open()
-    actors = dict(store.conn.execute("SELECT domain, actor FROM events"))
-    assert actors == {"light": "physical", "climate": "device"}
-    assert store.conn.execute("SELECT COUNT(*) FROM context").fetchone()[0] == 0
+    r = _row(1)
+    store.write([r])
+    r2 = _row(2)
+    r2.area = "garden"
+    store.write([r2])
+    assert store.conn.execute("SELECT area FROM entities").fetchone()[0] == "garden"
     store.close()

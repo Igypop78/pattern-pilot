@@ -56,6 +56,7 @@ from .const import (
     TRACKED_ATTRIBUTES,
 )
 from .context import ContextProvider
+from .groups import GroupResolver
 from .detectors import FLOORS, ChangeDetector, CounterRate, Signal, normalize
 from .store import EventRow, EventStore
 
@@ -94,6 +95,7 @@ class Collector:
         self.sensitivity: str = opts.get(CONF_SENSITIVITY, DEFAULT_SENSITIVITY)
         self.counters: set[str] = set()
         self.context = ContextProvider(hass)
+        self.groups = GroupResolver(hass)
 
         self._buffer: list[EventRow] = []
         self._contexts: OrderedDict[str, str] = OrderedDict()
@@ -118,6 +120,7 @@ class Collector:
         self._profiles = await self.hass.async_add_executor_job(self.store.load_profiles)
         self.counters = await _energy_counters(self.hass)
         await self.context.async_prepare()
+        await self.groups.async_start()
         bus = self.hass.bus
         self._unsubs += [
             bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed),
@@ -136,6 +139,7 @@ class Collector:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        self.groups.stop()
         await self.async_flush()
         await self.async_save_profiles()
 
@@ -263,6 +267,8 @@ class Collector:
             return
         if not ids:
             return
+        for entity_id in list(ids):
+            ids |= self.groups.expand(entity_id)  # Zigbee2MQTT / HA groups → members
         ts = event.time_fired.timestamp()
         for entity_id in ids:
             actor, user_id, ref = self._attribute(event.context, entity_id, "")
@@ -549,6 +555,7 @@ class Collector:
                 1 for det in self._detectors.values() if det.is_ready(time.time())
             ),
             "context": self.context.describe(),
+            "groups": self.groups.describe(),
             "buffered": len(self._buffer),
             "paired_with_command": self.paired,
             "pulses_merged": self.pulses,

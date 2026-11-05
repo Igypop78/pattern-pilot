@@ -6,10 +6,10 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.1.3"
+VERSION: Final = "0.1.4"
 
 DB_FILENAME: Final = "pattern_pilot.db"
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 
 # --- options keys -----------------------------------------------------------
 CONF_AREAS: Final = "areas"
