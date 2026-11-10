@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.1.4"
+VERSION: Final = "0.1.5"
 
 DB_FILENAME: Final = "pattern_pilot.db"
 SCHEMA_VERSION: Final = 4
@@ -132,6 +132,12 @@ PAIR_WINDOW_S: Final = 10
 # On → back off by itself within this time (gate impulse, doorbell) = one action.
 PULSE_S: Final = 5
 PULSE_DOMAINS: Final = ("switch",)
+
+# Binary sensor off → on again within this time = still the same activity (motion chatter).
+BINARY_MERGE_S: Final = 60
+
+# The same automation run is stored at most once in this time (frequent triggers are noise).
+RUN_THROTTLE_S: Final = 600
 
 # Event kinds stored in the database.
 KIND_STATE: Final = "state"

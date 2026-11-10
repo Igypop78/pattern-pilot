@@ -434,3 +434,99 @@ async def test_ha_group_members(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     rows = [r for r in await _rows(hass, entry) if r["entity_id"] == "light.a"]
     assert [(r["new"], r["actor"]) for r in rows] == [("on", "human")]
+
+
+async def test_zigbee2mqtt_group_by_unique_id(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    entry = await _setup(hass, domains=["light"])
+    ent_reg = er.async_get(hass)
+    g = ent_reg.async_get_or_create("light", "mqtt", "3_light_zigbee2mqtt", suggested_object_id="zahrada_vchod")
+    b1 = ent_reg.async_get_or_create("light", "mqtt", "0x00aa_light_zigbee2mqtt", suggested_object_id="ziarovka_1")
+    b2 = ent_reg.async_get_or_create("light", "mqtt", "0x00BB_light_zigbee2mqtt", suggested_object_id="ziarovka_2")
+    ent_reg.async_get_or_create("sensor", "mqtt", "0x00aa_linkquality_zigbee2mqtt", suggested_object_id="lq")
+    groups = entry.runtime_data.collector.groups
+    groups.set_z2m_groups(
+        "zigbee2mqtt",
+        [{"id": 3, "friendly_name": "Záhrada vchod", "members": [
+            {"ieee_address": "0x00aa", "endpoint": 1}, {"ieee_address": "0x00bb", "endpoint": 1}]}],
+    )
+    assert groups.expand(g.entity_id) == {b1.entity_id, b2.entity_id}
+    assert groups.describe()["z2m_group_list"][0]["mapped"] == 1
+
+    # group entity itself is not recorded, members are
+    hass.states.async_set(g.entity_id, "off")
+    hass.states.async_set(b1.entity_id, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(g.entity_id, "on", context=Context())
+    hass.states.async_set(b1.entity_id, "on", context=Context())
+    await hass.async_block_till_done()
+    rows = await _rows(hass, entry)
+    assert [r["entity_id"] for r in rows] == [b1.entity_id]
+
+
+async def test_group_entities_skipped(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["light", "binary_sensor"])
+    for eid in ("light.hore_svetla", "binary_sensor.pohyb_dom"):
+        hass.states.async_set(eid, "off", {"entity_id": ["x.a", "x.b"]})
+    await hass.async_block_till_done()
+    for eid in ("light.hore_svetla", "binary_sensor.pohyb_dom"):
+        hass.states.async_set(eid, "on", {"entity_id": ["x.a", "x.b"]}, context=Context())
+    await hass.async_block_till_done()
+    assert await _rows(hass, entry) == []
+    assert entry.runtime_data.collector.groups_skipped == 2
+
+
+async def test_motion_flapping_merged(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["binary_sensor"])
+    motion = "binary_sensor.kamera_zahrada_pohyb"
+    hass.states.async_set(motion, "off")
+    await hass.async_block_till_done()
+    for state in ("on", "off", "on", "off", "on", "off"):
+        hass.states.async_set(motion, state)
+        await hass.async_block_till_done()
+    collector = entry.runtime_data.collector
+    # final off is still held (could continue) – released on stop
+    await collector.async_flush(final=True)
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == motion]
+    assert [r["new"] for r in rows] == ["on", "off"]
+    assert collector.binary_merged == 2
+
+
+async def test_automation_runs_throttled(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, domains=["light"])
+    for _ in range(5):
+        hass.bus.async_fire(
+            "automation_triggered",
+            {"entity_id": "automation.tablet_led", "name": "x", "source": "state"},
+            context=Context(parent_id="t"),
+        )
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["kind"] == "run"]
+    assert len(rows) == 1
+    assert entry.runtime_data.collector.runs_throttled == 4
+
+
+async def test_energy_counters_consumption_only(hass: HomeAssistant) -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from custom_components.pattern_pilot.collector import _energy_counters
+
+    manager = MagicMock()
+    manager.data = {
+        "energy_sources": [
+            {"type": "grid", "flow_from": [{"stat_energy_from": "sensor.import", "stat_cost": "sensor.cost"}],
+             "flow_to": [{"stat_energy_to": "sensor.export"}]},
+            {"type": "solar", "stat_energy_from": "sensor.pv"},
+            {"type": "battery", "stat_energy_from": "sensor.bat_out", "stat_energy_to": "sensor.bat_in"},
+            {"type": "gas", "stat_energy_from": "sensor.gas"},
+            {"type": "water", "stat_energy_from": "sensor.water"},
+            {"type": "grid", "stat_energy_from": "external:stat"},
+        ],
+        "device_consumption": [{"stat_consumption": "sensor.washer"}],
+    }
+    with patch(
+        "homeassistant.components.energy.data.async_get_manager", AsyncMock(return_value=manager)
+    ):
+        found = await _energy_counters(hass)
+    assert found == {"sensor.import", "sensor.gas", "sensor.water", "sensor.washer"}

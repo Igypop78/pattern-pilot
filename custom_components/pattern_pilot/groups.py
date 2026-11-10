@@ -1,8 +1,9 @@
 """Group members – a command to a group also counts for its members.
 
 * Zigbee2MQTT groups: read from ``<base_topic>/bridge/groups`` and matched to HA
-  devices by their MQTT identifiers (``zigbee2mqtt_0x…`` for devices,
-  ``zigbee2mqtt_<encoded base topic>_<group id>`` for groups).
+  entities by their MQTT unique ids (``0x<ieee>_<object>_<base>`` for devices,
+  ``<group id>_<object>_<base>`` for groups), or by device identifiers
+  (``zigbee2mqtt_0x…`` / ``zigbee2mqtt_<encoded base topic>_<group id>``).
 * Home Assistant groups (light / switch / cover … groups, old-style groups):
   members from the ``entity_id`` attribute.
 """
@@ -31,6 +32,7 @@ class GroupResolver:
         self.hass = hass
         self._z2m: dict[str, list[dict[str, Any]]] = {}  # base topic → groups payload
         self.members: dict[str, set[str]] = {}  # group entity → member entities
+        self._report: list[dict[str, Any]] = []
         self._unsubs: list[Callable[[], None]] = []
 
     async def async_start(self) -> None:
@@ -77,37 +79,65 @@ class GroupResolver:
     def rebuild(self) -> None:
         dev_reg = dr.async_get(self.hass)
         ent_reg = er.async_get(self.hass)
-        by_ieee: dict[str, str] = {}
-        by_group: dict[str, str] = {}
+        mqtt_entities = [e for e in ent_reg.entities.values() if e.platform == "mqtt"]
+
+        # 1) by device identifiers
+        by_ieee_dev: dict[str, str] = {}
+        by_group_dev: dict[str, str] = {}
         for device in dev_reg.devices.values():
             for domain, ident in device.identifiers:
                 if domain != "mqtt":
                     continue
                 if m := _DEVICE_RE.match(ident):
-                    by_ieee[m.group(1).lower()] = device.id
+                    by_ieee_dev[m.group(1).lower()] = device.id
                 elif m := _GROUP_RE.match(ident):
-                    by_group[m.group(2)] = device.id
+                    by_group_dev[m.group(2)] = device.id
+
         members: dict[str, set[str]] = {}
-        for groups in self._z2m.values():
-            for group in groups:
-                group_dev = by_group.get(str(group.get("id")))
-                if not group_dev:
+        report: list[dict[str, Any]] = []
+        for base, groups in self._z2m.items():
+            # 2) by unique ids: "<id>_<object>_<base>"
+            suffix = f"_{base}"
+            by_ieee_uid: dict[str, list[er.RegistryEntry]] = {}
+            by_group_uid: dict[str, list[er.RegistryEntry]] = {}
+            for e in mqtt_entities:
+                uid = str(e.unique_id or "")
+                if not uid.endswith(suffix):
                     continue
-                member_devs = {
-                    by_ieee.get(str(m.get("ieee_address", "")).lower())
-                    for m in group.get("members") or []
-                }
-                member_entities = [
-                    e
-                    for dev_id in member_devs
-                    if dev_id
-                    for e in er.async_entries_for_device(ent_reg, dev_id)
-                ]
-                for ge in er.async_entries_for_device(ent_reg, group_dev):
+                head = uid[: -len(suffix)].split("_", 1)[0]
+                if head.lower().startswith("0x"):
+                    by_ieee_uid.setdefault(head.lower(), []).append(e)
+                elif head.isdigit():
+                    by_group_uid.setdefault(head, []).append(e)
+
+            for group in groups:
+                gid = str(group.get("id"))
+                ieees = [str(m.get("ieee_address", "")).lower() for m in group.get("members") or []]
+                group_entities = list(by_group_uid.get(gid, []))
+                if gid in by_group_dev:
+                    group_entities += er.async_entries_for_device(ent_reg, by_group_dev[gid])
+                member_entities: list[er.RegistryEntry] = []
+                for ieee in ieees:
+                    member_entities += by_ieee_uid.get(ieee, [])
+                    if ieee in by_ieee_dev:
+                        member_entities += er.async_entries_for_device(ent_reg, by_ieee_dev[ieee])
+                mapped = 0
+                for ge in {e.entity_id: e for e in group_entities}.values():
                     found = {e.entity_id for e in member_entities if e.domain == ge.domain}
                     if found:
                         members[ge.entity_id] = found
+                        mapped += 1
+                report.append(
+                    {
+                        "name": group.get("friendly_name"),
+                        "members": len(ieees),
+                        "group_entities": sorted({e.entity_id for e in group_entities}),
+                        "member_entities": len({e.entity_id for e in member_entities}),
+                        "mapped": mapped,
+                    }
+                )
         self.members = members
+        self._report = report
 
     def expand(self, entity_id: str) -> set[str]:
         """Members of a group entity (Zigbee2MQTT or Home Assistant group), recursively."""
@@ -132,5 +162,6 @@ class GroupResolver:
         return {
             "z2m_bridges": sorted(self._z2m),
             "z2m_groups": sum(len(g) for g in self._z2m.values()),
+            "z2m_group_list": self._report,
             "group_entities_mapped": {k: sorted(v) for k, v in self.members.items()},
         }

@@ -33,6 +33,7 @@ from .const import (
     ACTOR_PHYSICAL,
     ACTOR_SYSTEM,
     ATTRIBUTE_MIN_DELTA,
+    BINARY_MERGE_S,
     CONF_AREAS,
     CONF_DOMAINS,
     CONF_EXCLUDE_ENTITIES,
@@ -53,6 +54,7 @@ from .const import (
     PHYSICAL_MANUAL_DOMAINS,
     PULSE_DOMAINS,
     PULSE_S,
+    RUN_THROTTLE_S,
     TRACKED_ATTRIBUTES,
 )
 from .context import ContextProvider
@@ -106,6 +108,12 @@ class Collector:
         self._last_change: dict[str, tuple[float, str | None, str | None]] = {}
         self.paired = 0
         self.pulses = 0
+        # binary sensor → held "off" row (written later unless it turns on again soon)
+        self._held_off: dict[str, EventRow] = {}
+        self._last_run: dict[str, float] = {}
+        self.binary_merged = 0
+        self.runs_throttled = 0
+        self.groups_skipped = 0
         self._detectors: dict[str, ChangeDetector] = {}
         self._rates: dict[str, CounterRate] = {}
         self._sensor_kind: dict[str, str | None] = {}
@@ -140,7 +148,7 @@ class Collector:
             unsub()
         self._unsubs.clear()
         self.groups.stop()
-        await self.async_flush()
+        await self.async_flush(final=True)
         await self.async_save_profiles()
 
     async def async_save_profiles(self) -> None:
@@ -158,8 +166,10 @@ class Collector:
         self._sensor_kind.clear()
         await self.context.async_prepare()
 
-    async def async_flush(self) -> int:
-        self._tick_detectors(time.time())
+    async def async_flush(self, final: bool = False) -> int:
+        now = time.time()
+        self._tick_detectors(now)
+        self._release_held(now, final)
         if not self._buffer:
             return 0
         rows, self._buffer = self._buffer, []
@@ -295,10 +305,17 @@ class Collector:
             actor = ACTOR_HUMAN  # run manually from the UI
         else:
             actor = ACTOR_AUTOMATION
+        ts = event.time_fired.timestamp()
+        if actor == ACTOR_AUTOMATION:
+            last = self._last_run.get(entity_id)
+            if last is not None and ts - last < RUN_THROTTLE_S:
+                self.runs_throttled += 1
+                return
+            self._last_run[entity_id] = ts
         source = event.data.get("source")
         self._add(
             EventRow(
-                ts=event.time_fired.timestamp(),
+                ts=ts,
                 entity_id=entity_id,
                 domain="automation",
                 area=None,
@@ -324,6 +341,9 @@ class Collector:
         domain = new.domain
         if domain not in self.domains:
             return
+        if self._is_group(entity_id, new):
+            self.groups_skipped += 1
+            return
         if domain == "sensor":
             self._feed_sensor(entity_id, new, ts)
             return
@@ -335,6 +355,14 @@ class Collector:
             self._state_change(entity_id, domain, area, old, new, ts)
         elif domain in TRACKED_ATTRIBUTES:
             self._attribute_change(entity_id, domain, area, old, new, ts)
+
+    def _is_group(self, entity_id: str, state: State) -> bool:
+        """Group entities only repeat their members – the members are recorded instead."""
+        if state.domain == "scene":
+            return False
+        if isinstance(state.attributes.get("entity_id"), (list, tuple)):
+            return True
+        return entity_id in self.groups.members
 
     # -- state / attribute changes ----------------------------------------------------
     def _state_change(
@@ -439,24 +467,42 @@ class Collector:
                 override = True
                 ref = last[1]
             self._last_auto.pop(entity_id, None)
-        self._add(
-            EventRow(
-                ts=ts,
-                entity_id=entity_id,
-                domain=domain,
-                area=area,
-                kind=kind,
-                old=old_v,
-                new=new_v,
-                value=value,
-                actor=actor,
-                user_id=user_id,
-                ref=ref,
-                override=override,
-                context_id=state.context.id,
-                context=self.context.snapshot() if actor in MANUAL_ACTORS else None,
-            )
+        row = EventRow(
+            ts=ts,
+            entity_id=entity_id,
+            domain=domain,
+            area=area,
+            kind=kind,
+            old=old_v,
+            new=new_v,
+            value=value,
+            actor=actor,
+            user_id=user_id,
+            ref=ref,
+            override=override,
+            context_id=state.context.id,
+            context=self.context.snapshot() if actor in MANUAL_ACTORS else None,
         )
+        if domain == "binary_sensor" and kind == KIND_STATE:
+            if new_v == "off":
+                # hold – if it turns on again within a minute it is the same activity
+                prev = self._held_off.pop(entity_id, None)
+                if prev is not None:
+                    self._add(prev)
+                self._held_off[entity_id] = row
+                return
+            held = self._held_off.pop(entity_id, None)
+            if held is not None:
+                if new_v == "on" and ts - held.ts <= BINARY_MERGE_S:
+                    self.binary_merged += 1
+                    return  # drop both the short "off" and this "on"
+                self._add(held)
+        self._add(row)
+
+    def _release_held(self, now: float, final: bool = False) -> None:
+        for entity_id, row in list(self._held_off.items()):
+            if final or now - row.ts > BINARY_MERGE_S:
+                self._add(self._held_off.pop(entity_id))
 
     # -- sensors → rise / fall events ---------------------------------------------------
     def _classify(self, entity_id: str, state: State) -> str | None:
@@ -559,13 +605,20 @@ class Collector:
             "buffered": len(self._buffer),
             "paired_with_command": self.paired,
             "pulses_merged": self.pulses,
+            "binary_flaps_merged": self.binary_merged,
+            "automation_runs_throttled": self.runs_throttled,
+            "group_updates_skipped": self.groups_skipped,
             "captured_since_start": self.captured,
             "manual_since_start": self.manual_captured,
         }
 
 
 async def _energy_counters(hass: HomeAssistant) -> set[str]:
-    """Counters configured in the Energy dashboard (grid, solar, battery, gas, water, devices)."""
+    """Consumption meters from the Energy dashboard: grid import, gas, water, individual devices.
+
+    Solar production, battery and export follow the sun and the battery logic,
+    not people – they are left out.
+    """
     try:
         from homeassistant.components.energy.data import (  # noqa: PLC0415
             async_get_manager,
@@ -576,19 +629,24 @@ async def _energy_counters(hass: HomeAssistant) -> set[str]:
     except Exception:  # noqa: BLE001 - energy not set up
         return set()
     found: set[str] = set()
-    skip = ("stat_cost", "stat_compensation", "stat_rate")
 
-    def walk(obj: Any) -> None:
+    def collect(obj: Any, keys: tuple[str, ...]) -> None:
         if isinstance(obj, dict):
             for key, value in obj.items():
                 if isinstance(value, str):
-                    if key.startswith("stat_") and key not in skip and "." in value and ":" not in value:
+                    if key in keys and "." in value and ":" not in value:
                         found.add(value)
-                else:
-                    walk(value)
+                elif key not in ("flow_to",):
+                    collect(value, keys)
         elif isinstance(obj, list):
             for item in obj:
-                walk(item)
+                collect(item, keys)
 
-    walk(data)
+    for source in data.get("energy_sources") or []:
+        kind = source.get("type") if isinstance(source, dict) else None
+        if kind in ("grid", "gas", "water"):
+            collect(source, ("stat_energy_from",))
+    for key, value in data.items():
+        if key.startswith("device_consumption"):
+            collect(value, ("stat_consumption",))
     return found

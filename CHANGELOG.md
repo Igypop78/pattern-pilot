@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.5] – 2026-11-10
+
+Less noise, based on a week of real data (~17 000 events a day):
+- **Group entities are skipped.** Light / switch / cover groups, binary sensor groups (whole-house motion,
+  windows, doors), sensor groups and Zigbee2MQTT groups only repeat their members – they doubled the
+  events and showed up as manual actions (e.g. *Upstairs lights 133×*). Members are recorded as before;
+  a command to a group still counts for its members.
+- **Zigbee2MQTT groups are matched by unique id** as well (`0x…_light_zigbee2mqtt`,
+  `<group id>_light_zigbee2mqtt`) – matching by device identifiers alone found no group on a real system.
+  Diagnostics list each group with how many entities were matched.
+- **Motion flapping merged.** A binary sensor that turns on again within 60 s after turning off is one
+  activity (camera motion, PIR re-triggers).
+- **Automation runs throttled.** The same automation is recorded at most once per 10 minutes
+  (some ran 800–900 times a day). Which automation changed a device is still recorded with the change.
+- **Energy dashboard: consumption only** – grid import, gas, water and individual devices.
+  Solar production, battery and export follow the sun and the battery logic, not people.
+
 ## [0.1.4] – 2026-11-05
 
 - **Group members.** A command to a **Zigbee2MQTT group** now counts for its member devices too –
