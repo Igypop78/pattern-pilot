@@ -114,6 +114,7 @@ class Collector:
         self.binary_merged = 0
         self.runs_throttled = 0
         self.groups_skipped = 0
+        self._mirrored: set[str] | None = None
         self._detectors: dict[str, ChangeDetector] = {}
         self._rates: dict[str, CounterRate] = {}
         self._sensor_kind: dict[str, str | None] = {}
@@ -188,6 +189,7 @@ class Collector:
     @callback
     def _on_registry(self, _event: Event) -> None:
         self._tracked_cache.clear()
+        self._mirrored = None
         self._sensor_kind.clear()
 
     # -- filtering ---------------------------------------------------------------
@@ -356,10 +358,34 @@ class Collector:
         elif domain in TRACKED_ATTRIBUTES:
             self._attribute_change(entity_id, domain, area, old, new, ts)
 
+    def _mirrored_sources(self) -> set[str]:
+        """Sources hidden behind a "Change device type of a switch" helper (switch_as_x)."""
+        if self._mirrored is None:
+            ent_reg = er.async_get(self.hass)
+            found: set[str] = set()
+            for cfg in self.hass.config_entries.async_entries("switch_as_x"):
+                source = cfg.options.get("entity_id")
+                if not source:
+                    continue
+                try:
+                    resolved = er.async_resolve_entity_id(ent_reg, source)
+                except Exception:  # noqa: BLE001
+                    resolved = None
+                if resolved:
+                    found.add(resolved)
+            self._mirrored = found
+        return self._mirrored
+
     def _is_group(self, entity_id: str, state: State) -> bool:
-        """Group entities only repeat their members – the members are recorded instead."""
+        """Group entities only repeat their members – the members are recorded instead.
+
+        The same goes for a switch hidden behind a switch_as_x helper: the light / cover /
+        fan the person uses is recorded, the hidden source switch would only repeat it.
+        """
         if state.domain == "scene":
             return False
+        if entity_id in self._mirrored_sources():
+            return True
         if isinstance(state.attributes.get("entity_id"), (list, tuple)):
             return True
         return entity_id in self.groups.members
@@ -608,6 +634,7 @@ class Collector:
             "binary_flaps_merged": self.binary_merged,
             "automation_runs_throttled": self.runs_throttled,
             "group_updates_skipped": self.groups_skipped,
+            "switch_as_x_sources_skipped": sorted(self._mirrored_sources()),
             "captured_since_start": self.captured,
             "manual_since_start": self.manual_captured,
         }

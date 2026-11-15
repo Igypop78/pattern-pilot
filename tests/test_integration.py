@@ -530,3 +530,51 @@ async def test_energy_counters_consumption_only(hass: HomeAssistant) -> None:
     ):
         found = await _energy_counters(hass)
     assert found == {"sensor.import", "sensor.gas", "sensor.water", "sensor.washer"}
+
+
+async def test_group_matching_survives_odd_identifiers(hass: HomeAssistant) -> None:
+    """Some integrations register identifiers with 3 values or numbers – must not stop matching."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from homeassistant.helpers import entity_registry as er
+
+    entry = await _setup(hass, domains=["light"])
+    ent_reg = er.async_get(hass)
+    g = ent_reg.async_get_or_create("light", "mqtt", "4_light_zigbee2mqtt", suggested_object_id="zahrada_vchod_svetlo")
+    b = ent_reg.async_get_or_create("light", "mqtt", "0x0c_light_zigbee2mqtt", suggested_object_id="ziarovka_1")
+    odd = SimpleNamespace(
+        devices={
+            "d1": SimpleNamespace(id="d1", identifiers={("xiaomi", "a", "b"), ("mqtt", 123), ("solo",)}),
+        }
+    )
+    groups = entry.runtime_data.collector.groups
+    with patch("custom_components.pattern_pilot.groups.dr.async_get", return_value=odd):
+        groups.set_z2m_groups(
+            "zigbee2mqtt", [{"id": 4, "friendly_name": "Záhrada vchod", "members": [{"ieee_address": "0x0c"}]}]
+        )
+    assert groups.error is None
+    assert groups.expand(g.entity_id) == {b.entity_id}
+    assert groups.describe()["z2m_group_list"][0]["mapped"] == 1
+
+
+async def test_switch_as_x_source_skipped(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    src = er.async_get(hass).async_get_or_create(
+        "switch", "test", "mirror", suggested_object_id="bathroom_up_mirror",
+        hidden_by=er.RegistryEntryHider.INTEGRATION,
+    )
+    MockConfigEntry(domain="switch_as_x", data={}, options={"entity_id": src.id, "target_domain": "light"}).add_to_hass(hass)
+    entry = await _setup(hass, domains=["light", "switch"])
+    light = "light.kupelna_hore_zrkadlo"
+    for eid in (src.entity_id, light):
+        hass.states.async_set(eid, "off")
+    await hass.async_block_till_done()
+    ctx = Context()
+    hass.states.async_set(src.entity_id, "on", context=ctx)
+    hass.states.async_set(light, "on", context=ctx)
+    await hass.async_block_till_done()
+    rows = await _rows(hass, entry)
+    assert [r["entity_id"] for r in rows] == [light]
+    assert entry.runtime_data.collector.describe()["switch_as_x_sources_skipped"] == [src.entity_id]

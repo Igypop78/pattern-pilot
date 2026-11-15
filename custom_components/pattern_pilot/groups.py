@@ -33,6 +33,7 @@ class GroupResolver:
         self._z2m: dict[str, list[dict[str, Any]]] = {}  # base topic → groups payload
         self.members: dict[str, set[str]] = {}  # group entity → member entities
         self._report: list[dict[str, Any]] = []
+        self.error: str | None = None
         self._unsubs: list[Callable[[], None]] = []
 
     async def async_start(self) -> None:
@@ -77,6 +78,14 @@ class GroupResolver:
 
     @callback
     def rebuild(self) -> None:
+        try:
+            self._rebuild()
+            self.error = None
+        except Exception as err:  # noqa: BLE001 - never break HA, show it in diagnostics
+            self.error = f"{type(err).__name__}: {err}"
+            _LOGGER.warning("Pattern Pilot: Zigbee2MQTT groups could not be matched: %s", self.error)
+
+    def _rebuild(self) -> None:
         dev_reg = dr.async_get(self.hass)
         ent_reg = er.async_get(self.hass)
         mqtt_entities = [e for e in ent_reg.entities.values() if e.platform == "mqtt"]
@@ -85,8 +94,12 @@ class GroupResolver:
         by_ieee_dev: dict[str, str] = {}
         by_group_dev: dict[str, str] = {}
         for device in dev_reg.devices.values():
-            for domain, ident in device.identifiers:
-                if domain != "mqtt":
+            for identifier in device.identifiers:
+                # some integrations use non-standard identifiers (3 values, numbers …)
+                if not isinstance(identifier, (tuple, list)) or len(identifier) < 2:
+                    continue
+                domain, ident = identifier[0], identifier[1]
+                if domain != "mqtt" or not isinstance(ident, str):
                     continue
                 if m := _DEVICE_RE.match(ident):
                     by_ieee_dev[m.group(1).lower()] = device.id
@@ -111,8 +124,14 @@ class GroupResolver:
                     by_group_uid.setdefault(head, []).append(e)
 
             for group in groups:
+                if not isinstance(group, dict):
+                    continue
                 gid = str(group.get("id"))
-                ieees = [str(m.get("ieee_address", "")).lower() for m in group.get("members") or []]
+                ieees = [
+                    str(m.get("ieee_address", "")).lower()
+                    for m in group.get("members") or []
+                    if isinstance(m, dict)
+                ]
                 group_entities = list(by_group_uid.get(gid, []))
                 if gid in by_group_dev:
                     group_entities += er.async_entries_for_device(ent_reg, by_group_dev[gid])
@@ -163,5 +182,6 @@ class GroupResolver:
             "z2m_bridges": sorted(self._z2m),
             "z2m_groups": sum(len(g) for g in self._z2m.values()),
             "z2m_group_list": self._report,
+            "error": self.error,
             "group_entities_mapped": {k: sorted(v) for k, v in self.members.items()},
         }

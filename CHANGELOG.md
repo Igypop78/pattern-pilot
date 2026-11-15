@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.6] – 2026-11-15
+
+- **Zigbee2MQTT groups really matched.** Matching stopped at the first device with a non-standard
+  identifier from another integration (three values, a number …), so no group was ever matched.
+  Such devices are now skipped; any remaining problem is shown in diagnostics (`groups.error`).
+- **"Change device type of a switch" helpers:** the hidden source switch is no longer recorded –
+  only the light / cover / fan you actually use (it was counted twice, e.g. a mirror light 133× + 125×).
+  Listed in diagnostics as `switch_as_x_sources_skipped`.
+
 ## [0.1.5] – 2026-11-10
 
 Less noise, based on a week of real data (~17 000 events a day):
