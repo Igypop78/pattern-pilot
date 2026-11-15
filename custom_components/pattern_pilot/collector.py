@@ -115,6 +115,9 @@ class Collector:
         self.runs_throttled = 0
         self.groups_skipped = 0
         self._mirrored: set[str] | None = None
+        self._members_cache: set[str] | None = None
+        self.hidden_skipped: set[str] = set()
+        self.groups.on_change = self._clear_caches
         self._detectors: dict[str, ChangeDetector] = {}
         self._rates: dict[str, CounterRate] = {}
         self._sensor_kind: dict[str, str | None] = {}
@@ -165,6 +168,8 @@ class Collector:
         """Nightly: reload Energy panel counters, holidays, weather entity."""
         self.counters = await _energy_counters(self.hass)
         self._sensor_kind.clear()
+        self._tracked_cache.clear()
+        self._members_cache = None
         await self.context.async_prepare()
 
     async def async_flush(self, final: bool = False) -> int:
@@ -188,8 +193,14 @@ class Collector:
 
     @callback
     def _on_registry(self, _event: Event) -> None:
+        self._clear_caches()
+
+    @callback
+    def _clear_caches(self) -> None:
         self._tracked_cache.clear()
+        self._sensor_kind.clear()
         self._mirrored = None
+        self._members_cache = None
         self._sensor_kind.clear()
 
     # -- filtering ---------------------------------------------------------------
@@ -204,6 +215,11 @@ class Collector:
         if entry is not None:
             if entry.entity_category is not None or entry.platform == DOMAIN:
                 tracked = False
+            # hidden = duplicate / technical entity (e.g. the source of a switch_as_x helper);
+            # members of a group are kept – the group itself is skipped, they are the real devices
+            if entry.hidden_by is not None and entity_id not in self._group_members():
+                tracked = False
+                self.hidden_skipped.add(entity_id)
             area = entry.area_id
             if area is None and entry.device_id:
                 device = dr.async_get(self.hass).async_get(entry.device_id)
@@ -213,6 +229,21 @@ class Collector:
         result = (tracked, area)
         self._tracked_cache[entity_id] = result
         return result
+
+    def _group_members(self) -> set[str]:
+        """All entities that are members of some group (Home Assistant or Zigbee2MQTT)."""
+        if self._members_cache is None:
+            members: set[str] = set()
+            for state in self.hass.states.async_all():
+                if state.domain == "scene":
+                    continue
+                attr = state.attributes.get("entity_id")
+                if isinstance(attr, (list, tuple)):
+                    members.update(str(e) for e in attr)
+            for found in self.groups.members.values():
+                members |= found
+            self._members_cache = members
+        return self._members_cache
 
     # -- attribution -------------------------------------------------------------
     def _remember(self, context: Context, entity_id: str) -> None:
@@ -635,6 +666,7 @@ class Collector:
             "automation_runs_throttled": self.runs_throttled,
             "group_updates_skipped": self.groups_skipped,
             "switch_as_x_sources_skipped": sorted(self._mirrored_sources()),
+            "hidden_entities_skipped": sorted(self.hidden_skipped),
             "captured_since_start": self.captured,
             "manual_since_start": self.manual_captured,
         }

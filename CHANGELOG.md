@@ -5,9 +5,10 @@
 - **Zigbee2MQTT groups really matched.** Matching stopped at the first device with a non-standard
   identifier from another integration (three values, a number …), so no group was ever matched.
   Such devices are now skipped; any remaining problem is shown in diagnostics (`groups.error`).
-- **"Change device type of a switch" helpers:** the hidden source switch is no longer recorded –
-  only the light / cover / fan you actually use (it was counted twice, e.g. a mirror light 133× + 125×).
-  Listed in diagnostics as `switch_as_x_sources_skipped`.
+- **Hidden entities are skipped** – duplicates and technical entities, e.g. the source switch behind a
+  "Change device type of a switch" helper (a mirror light was counted twice, 133× + 125×). Exception:
+  hidden members of a group are kept, because the group itself is skipped and they are the real devices.
+  Diagnostics list them in `hidden_entities_skipped` (and `switch_as_x_sources_skipped`).
 
 ## [0.1.5] – 2026-11-10
 

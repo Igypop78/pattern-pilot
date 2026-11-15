@@ -578,3 +578,26 @@ async def test_switch_as_x_source_skipped(hass: HomeAssistant) -> None:
     rows = await _rows(hass, entry)
     assert [r["entity_id"] for r in rows] == [light]
     assert entry.runtime_data.collector.describe()["switch_as_x_sources_skipped"] == [src.entity_id]
+
+
+async def test_hidden_entities_skipped_but_group_members_kept(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    ent_reg = er.async_get(hass)
+    hidden = ent_reg.async_get_or_create(
+        "light", "test", "dup", suggested_object_id="duplikat", hidden_by=er.RegistryEntryHider.USER
+    )
+    member = ent_reg.async_get_or_create(
+        "light", "test", "m1", suggested_object_id="obyvacka_bodovka", hidden_by=er.RegistryEntryHider.INTEGRATION
+    )
+    hass.states.async_set("light.obyvacka_bodovky", "off", {"entity_id": [member.entity_id]})
+    entry = await _setup(hass, domains=["light"])
+    for eid in (hidden.entity_id, member.entity_id):
+        hass.states.async_set(eid, "off")
+    await hass.async_block_till_done()
+    for eid in (hidden.entity_id, member.entity_id):
+        hass.states.async_set(eid, "on", context=Context(user_id="igor"))
+    await hass.async_block_till_done()
+    rows = await _rows(hass, entry)
+    assert [r["entity_id"] for r in rows] == [member.entity_id]
+    assert entry.runtime_data.collector.describe()["hidden_entities_skipped"] == [hidden.entity_id]

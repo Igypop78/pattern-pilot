@@ -34,6 +34,7 @@ class GroupResolver:
         self.members: dict[str, set[str]] = {}  # group entity → member entities
         self._report: list[dict[str, Any]] = []
         self.error: str | None = None
+        self.on_change: Callable[[], None] | None = None
         self._unsubs: list[Callable[[], None]] = []
 
     async def async_start(self) -> None:
@@ -81,6 +82,8 @@ class GroupResolver:
         try:
             self._rebuild()
             self.error = None
+            if self.on_change is not None:
+                self.on_change()
         except Exception as err:  # noqa: BLE001 - never break HA, show it in diagnostics
             self.error = f"{type(err).__name__}: {err}"
             _LOGGER.warning("Pattern Pilot: Zigbee2MQTT groups could not be matched: %s", self.error)
