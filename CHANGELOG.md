@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.3] – 2026-11-15
+
+- **Cloud devices** (a car, cloud thermostats) report a change a minute or two after the command. HA commands
+  to entities of cloud integrations are now paired for up to 3 minutes (local devices stay at 10 s), and in the
+  analysis a change that follows a **time / sun automation** within 3 minutes on at least half of its runs is
+  treated as done by that automation – e.g. car preheating at 7:20 is no longer suggested as a habit.
+- **Brief use is not a schedule:** "turn on" and "turn off" of the same thing within 30 minutes at the same time of
+  day (an entrance light, a bathroom light at night) are no longer suggested as two time automations.
+- **Late evening:** activity before 3:00 belongs to the day before – 0:10 after a workday evening counts as that
+  workday.
+- **Improve automation** only when you undo it on at least **20 % of its runs** – a motion light that runs
+  many times a day and is sometimes switched off when leaving the room works fine.
+
 ## [0.2.2] – 2026-11-15
 
 Automations were suggested as habits (e.g. yard light at sunset, garden lanterns):

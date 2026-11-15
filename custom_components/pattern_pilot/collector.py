@@ -24,6 +24,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.loader import async_get_loaded_integration
 
 from .const import (
     ACTOR_AUTOMATION,
@@ -50,6 +51,7 @@ from .const import (
     MANUAL_ACTORS,
     MEASURE_DEVICE_CLASSES,
     OVERRIDE_WINDOW_S,
+    CLOUD_PAIR_WINDOW_S,
     PAIR_WINDOW_S,
     PHYSICAL_MANUAL_DOMAINS,
     PULSE_DOMAINS,
@@ -104,6 +106,7 @@ class Collector:
         self._last_auto: dict[str, tuple[float, str, str]] = {}
         # entity → (ts, actor, user_id, ref) of the last command sent from HA
         self._pending: dict[str, tuple[float, str, str | None, str | None]] = {}
+        self._cloud_cache: dict[str, bool] = {}
         # entity → (ts, old, new) of the last uncommanded change (pulse detection)
         self._last_change: dict[str, tuple[float, str | None, str | None]] = {}
         self.paired = 0
@@ -231,6 +234,22 @@ class Collector:
         self._tracked_cache[entity_id] = result
         return result
 
+    def _pair_window(self, entity_id: str) -> float:
+        """Cloud devices (a car, cloud thermostats) report the change a minute or two
+        after the command – wait longer for them."""
+        cached = self._cloud_cache.get(entity_id)
+        if cached is None:
+            cached = False
+            try:
+                entry = er.async_get(self.hass).async_get(entity_id)
+                if entry is not None:
+                    integration = async_get_loaded_integration(self.hass, entry.platform)
+                    cached = str(integration.iot_class or "").startswith("cloud")
+            except Exception:  # noqa: BLE001 - unknown integration = local
+                cached = False
+            self._cloud_cache[entity_id] = cached
+        return CLOUD_PAIR_WINDOW_S if cached else PAIR_WINDOW_S
+
     def _group_members(self) -> set[str]:
         """All entities that are members of some group (Home Assistant or Zigbee2MQTT)."""
         if self._members_cache is None:
@@ -322,7 +341,7 @@ class Collector:
                 actor = ACTOR_SYSTEM  # a command without origin = some integration
             self._pending[entity_id] = (ts, actor, user_id, ref)
         if len(self._pending) > 2000:
-            cutoff = ts - PAIR_WINDOW_S
+            cutoff = ts - CLOUD_PAIR_WINDOW_S
             self._pending = {k: v for k, v in self._pending.items() if v[0] >= cutoff}
 
     # -- event handlers ------------------------------------------------------------
@@ -552,7 +571,7 @@ class Collector:
                 return
             self._last_change[entity_id] = (ts, old_v, new_v)
         if actor in (ACTOR_PHYSICAL, ACTOR_DEVICE, ACTOR_SYSTEM):
-            if cmd and 0 <= ts - cmd[0] <= PAIR_WINDOW_S:
+            if cmd and 0 <= ts - cmd[0] <= self._pair_window(entity_id):
                 actor, user_id, ref = cmd[1], cmd[2], cmd[3]
                 self.paired += 1
         override = False

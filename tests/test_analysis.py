@@ -189,3 +189,55 @@ def test_changes_right_after_time_or_sun_automation_are_not_habits():
     inp = make(manual)
     inp.runs = [(ts(d, 16, 20), "automation.upozornenie", "state of binary_sensor.pohyb") for d in range(15)]
     assert len(Analyzer(inp).run()) == 1
+
+
+def test_cloud_device_reporting_late_after_time_automation():
+    # car climate: automation at 7:20, the car reports "on" a minute or two later
+    manual = [Manual(ts(d, 7, 21, 30 + d), "climate.auto", "climate", "on", "workday", "day") for d in range(15)]
+    # sometimes turned on by hand earlier – not enough for a habit
+    manual += [Manual(ts(d, 6, 50), "climate.auto", "climate", "on", "workday", "day") for d in (3, 9)]
+    inp = make(manual)
+    inp.runs = [(ts(d, 7, 20), "automation.predohrev_auta", "time") for d in range(15)]
+    Analyzer(inp)
+    assert len(inp.manual) == 2
+    # a real manual action that only sometimes follows a time automation is kept
+    manual = [Manual(ts(d, 7, 21), "light.x", "light", "on", "workday", "day") for d in range(3)]
+    inp = make(manual)
+    inp.runs = [(ts(d, 7, 20), "automation.ranna", "time") for d in range(15)]
+    Analyzer(inp)
+    assert len(inp.manual) == 3
+
+
+def test_short_use_is_not_a_schedule():
+    manual = []
+    for d in range(15):
+        manual.append(Manual(ts(d, 16, 50), "light.vchod", "light", "on", day_type((START + timedelta(days=d)).date()), "night"))
+        manual.append(Manual(ts(d, 16, 56), "light.vchod", "light", "off", day_type((START + timedelta(days=d)).date()), "night"))
+        manual.append(Manual(ts(d, 21, 0), "light.zrkadlo", "light", "off", day_type((START + timedelta(days=d)).date()), "night"))
+    res = Analyzer(make(manual)).run()
+    assert [s["entity_id"] for s in res] == ["light.zrkadlo"]
+
+
+def test_after_midnight_belongs_to_the_evening_before():
+    # every Monday–Friday evening (so Tue–Sat 0:10 by the clock)
+    manual = []
+    for d in range(15):
+        day = (START + timedelta(days=d)).date()
+        if day.weekday() < 5:
+            manual.append(Manual(ts(d + 1, 0, 10), "light.x", "light", "on", "workday", "night"))
+    res = Analyzer(make(manual)).time_habits()
+    assert len(res) == 1
+    assert res[0]["days"] == "workday"
+    assert res[0]["at"] == "00:10"
+    assert res[0]["window"][0] <= "00:10" or res[0]["window"][0] > "23:00"
+
+
+def test_rare_undo_of_busy_automation_is_fine():
+    ref = "automation.kupelna_pohyb"
+    auto = [Trig(ts(d, h, 0), "light.kupelna", "light", "on") for d in range(5, 14) for h in (7, 12, 18, 21)]
+    ov = [Override(ts(d, 21, 0, 10), "light.kupelna", "off", ref) for d in range(5, 11)]
+    inp = make(automated=auto, overrides=ov)
+    inp.runs = [(ts(d, h, 0), ref, "state of binary_sensor.pohyb") for d in range(5, 14) for h in (7, 12, 18, 21)]
+    assert Analyzer(inp).improvements() == []
+    inp.runs = inp.runs[:20]
+    assert len(Analyzer(inp).improvements()) == 1

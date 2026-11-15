@@ -35,6 +35,11 @@ REVERT_S = 30  # improve: reverted within this after the automation changed it
 DEVICE_LINK_S = 3  # trigger: B typically within this after A = device link, not a person
 MERGE_MIN = 10  # time habits of one room within this many minutes are merged
 SCHEDULED_RUN_S = 15  # a "manual" change this soon after a time / sun automation ran = that automation
+LATE_RUN_S = 180  # cloud devices report late: a change that follows a time / sun run this often …
+LATE_MIN_SHARE = 0.5  # … on at least half of its runs (and at least MIN_HITS times) = that automation
+SHORT_USE_MIN = 30  # "on" and "off" habits this close together = brief use (motion), not a schedule
+DAY_START_MIN = 180  # activity before 3:00 belongs to the previous day (late evening)
+MIN_OVERRIDE_SHARE = 0.2  # suggest improving only if undone on at least 20 % of the automation's runs
 STRIP_DAYS = 14
 
 # what may be suggested and how (state → service)
@@ -151,20 +156,39 @@ class Analyzer:
         self.day_types = {d: data.day_type(d) for d in self.days}
         # Changes recorded before attribution was exact (or of devices that report late)
         # can look manual although a time / sun automation did them: drop those.
-        scheduled = sorted(
-            ts for ts, _ref, source in data.runs if source and str(source).lower().startswith(("time", "sun"))
+        sched = sorted(
+            (ts, ref)
+            for ts, ref, source in data.runs
+            if source and str(source).lower().startswith(("time", "sun"))
         )
-        if scheduled:
-            kept = []
-            for m in data.manual:
-                i = bisect_right(scheduled, m.ts)
-                if i and m.ts - scheduled[i - 1] <= SCHEDULED_RUN_S:
+        if sched:
+            sched_ts = [t for t, _ in sched]
+            runs_per_ref: dict[str, int] = defaultdict(int)
+            for _t, ref in sched:
+                runs_per_ref[ref] += 1
+            late: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+            kept: list[Manual] = []
+            for idx, m in enumerate(data.manual):
+                i = bisect_right(sched_ts, m.ts)
+                if i and m.ts - sched_ts[i - 1] <= SCHEDULED_RUN_S:
                     continue
+                if i and m.ts - sched_ts[i - 1] <= LATE_RUN_S:
+                    late[(sched[i - 1][1], m.entity_id, m.new)].append(len(kept))
                 kept.append(m)
-            data.manual = kept
+            drop: set[int] = set()
+            for (ref, _e, _n), positions in late.items():
+                if len(positions) >= MIN_HITS and len(positions) >= LATE_MIN_SHARE * runs_per_ref[ref]:
+                    drop.update(positions)
+            data.manual = [m for i, m in enumerate(kept) if i not in drop]
 
     def local(self, ts: float) -> datetime:
         return datetime.fromtimestamp(ts, self.d.tz)
+
+    def slot(self, ts: float) -> tuple[date, int]:
+        """(day, minute of that day) – a day runs from 3:00 to 3:00, so a bathroom visit
+        at 0:10 belongs to the evening before (and its workday / weekend)."""
+        lt = self.local(ts) - timedelta(minutes=DAY_START_MIN)
+        return lt.date(), lt.hour * 60 + lt.minute
 
     # ------------------------------------------------------------------------------
     def run(self) -> list[dict[str, Any]]:
@@ -172,11 +196,33 @@ class Analyzer:
         trig = self.trigger_habits()
         trig_keys = {(s["entity_id"], s["action"]) for s in trig}
         out += trig
-        out += [s for s in self.time_habits() if (s["entity_id"], s["action"]) not in trig_keys]
+        out += self.drop_short_use(
+            [s for s in self.time_habits() if (s["entity_id"], s["action"]) not in trig_keys]
+        )
         out = self.merge(out)
         out += self.improvements()
         out.sort(key=lambda s: s["score"], reverse=True)
         return out
+
+    @staticmethod
+    def drop_short_use(habits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Switched on and off again within half an hour at the same time of day – somebody
+        just uses the room (a motion sensor's job), it is not a schedule. Drop both."""
+        on_states = {"on", "open"}
+        off_of = {"on": "off", "open": "closed"}
+        drop: set[str] = set()
+        for a in habits:
+            if a["action"] not in on_states:
+                continue
+            for b in habits:
+                if b["entity_id"] != a["entity_id"] or b["action"] != off_of[a["action"]]:
+                    continue
+                if b["days"] != a["days"] and "all" not in (a["days"], b["days"]):
+                    continue
+                gap = (_minutes(b["at"]) - _minutes(a["at"])) % 1440
+                if gap <= SHORT_USE_MIN:
+                    drop.update((a["id"], b["id"]))
+        return [h for h in habits if h["id"] not in drop]
 
     # -- merging ---------------------------------------------------------------------
     def merge(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -239,14 +285,13 @@ class Analyzer:
         for m in d.manual:
             if m.entity_id in d.exclude or not suggestible(m.domain, m.new, d.entities.get(m.entity_id)):
                 continue
-            lt = self.local(m.ts)
-            if lt.date() in self.dayset:
-                groups[(m.entity_id, m.new)].append((lt.date(), lt.hour * 60 + lt.minute, m.sun))
+            day, minute = self.slot(m.ts)
+            if day in self.dayset:
+                groups[(m.entity_id, m.new)].append((day, minute, m.sun))
 
         automated: dict[tuple[str, str], list[tuple[date, int]]] = defaultdict(list)
         for a in d.automated:
-            lt = self.local(a.ts)
-            automated[(a.entity_id, a.new)].append((lt.date(), lt.hour * 60 + lt.minute))
+            automated[(a.entity_id, a.new)].append(self.slot(a.ts))
 
         out = []
         for (entity_id, action), occ in groups.items():
@@ -273,7 +318,7 @@ class Analyzer:
                 continue
             _score, dg, start, hits, eligible, support, false_per_week = best
             times = sorted(hits.values())
-            at = int(round(median(times) / 5) * 5)
+            at = int(round(median(times) / 5) * 5) + DAY_START_MIN
             window_end = start + WINDOW_MIN
             # already done by an automation in that window on most days?
             done = {
@@ -292,7 +337,7 @@ class Analyzer:
                     "entity_id": entity_id,
                     "action": action,
                     "at": _hhmm(at),
-                    "window": [_hhmm(start), _hhmm(window_end)],
+                    "window": [_hhmm(start + DAY_START_MIN), _hhmm(window_end + DAY_START_MIN)],
                     "days": dg,
                     "dark": dark,
                     "hits": len(hits),
@@ -440,10 +485,17 @@ class Analyzer:
             # a real "undo": reverted within 30 s after the automation changed it
             if i and o.ts - lst[i - 1] <= REVERT_S:
                 groups[o.ref].append(o)
+        runs_since: dict[str, int] = defaultdict(int)
+        for ts, ref, _src in d.runs:
+            if ts >= since:
+                runs_since[ref] += 1
         out = []
         for ref, items in groups.items():
             if len(items) < MIN_OVERRIDES:
                 continue
+            runs = runs_since.get(ref, 0)
+            if runs and len(items) < MIN_OVERRIDE_SHARE * runs:
+                continue  # undone now and then (somebody leaving the room) – it works fine
             days = {self.local(o.ts).date() for o in items}
             per_entity: dict[str, int] = defaultdict(int)
             states: dict[str, int] = defaultdict(int)

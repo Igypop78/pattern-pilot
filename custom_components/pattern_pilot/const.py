@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.2.2"
+VERSION: Final = "0.2.3"
 
 DB_FILENAME: Final = "pattern_pilot.db"
 SCHEMA_VERSION: Final = 5
@@ -128,6 +128,7 @@ PHYSICAL_MANUAL_DOMAINS: Final = ("light", "switch", "cover", "fan", "media_play
 # A command from HA (automation, app) and the device's confirmation arriving later
 # without context (Zigbee2MQTT, MQTT, cloud) are paired within this time.
 PAIR_WINDOW_S: Final = 10
+CLOUD_PAIR_WINDOW_S: Final = 180  # cloud integrations report the change late
 
 # On → back off by itself within this time (gate impulse, doorbell) = one action.
 PULSE_S: Final = 5
