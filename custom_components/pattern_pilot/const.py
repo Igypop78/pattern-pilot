@@ -6,10 +6,10 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.1.6"
+VERSION: Final = "0.2.0"
 
 DB_FILENAME: Final = "pattern_pilot.db"
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 
 # --- options keys -----------------------------------------------------------
 CONF_AREAS: Final = "areas"
@@ -153,3 +153,12 @@ OVERRIDE_WINDOW_S: Final = 120
 FLUSH_INTERVAL_S: Final = 30
 
 SIGNAL_STATS_UPDATED: Final = f"{DOMAIN}_stats_updated"
+
+SIGNAL_SUGGESTIONS_UPDATED: Final = f"{DOMAIN}_suggestions_updated"
+
+STATUS_NEW: Final = "new"
+STATUS_ACCEPTED: Final = "accepted"
+STATUS_SNOOZED: Final = "snoozed"
+STATUS_REJECTED: Final = "rejected"
+SUGGESTION_STATUSES: Final = (STATUS_NEW, STATUS_ACCEPTED, STATUS_SNOOZED, STATUS_REJECTED)
+SNOOZE_DAYS: Final = 30

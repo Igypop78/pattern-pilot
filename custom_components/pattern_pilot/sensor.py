@@ -20,7 +20,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import PatternPilotConfigEntry, PatternPilotData
-from .const import DOMAIN, MIN_DAYS_FOR_ANALYSIS, NAME, SIGNAL_STATS_UPDATED, VERSION
+from .const import (
+    DOMAIN,
+    MIN_DAYS_FOR_ANALYSIS,
+    NAME,
+    SIGNAL_STATS_UPDATED,
+    SIGNAL_SUGGESTIONS_UPDATED,
+    VERSION,
+)
 
 STATUS_COLLECTING = "collecting"
 STATUS_READY = "ready"
@@ -60,6 +67,15 @@ def _status_attrs(d: PatternPilotData) -> dict[str, Any]:
 
 
 SENSORS: tuple[PPSensorDescription, ...] = (
+    PPSensorDescription(
+        key="suggestions",
+        translation_key="suggestions",
+        value_fn=lambda d: d.suggestions_new,
+        attrs_fn=lambda d: {
+            "last_analysis": d.last_analysis,
+            "preliminary": d.stats.days < MIN_DAYS_FOR_ANALYSIS,
+        },
+    ),
     PPSensorDescription(
         key="status",
         translation_key="status",
@@ -134,9 +150,8 @@ class PatternPilotSensor(SensorEntity):
         )
 
     async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_STATS_UPDATED, self._handle_update)
-        )
+        for signal in (SIGNAL_STATS_UPDATED, SIGNAL_SUGGESTIONS_UPDATED):
+            self.async_on_remove(async_dispatcher_connect(self.hass, signal, self._handle_update))
 
     @callback
     def _handle_update(self) -> None:

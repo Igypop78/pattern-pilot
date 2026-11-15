@@ -105,6 +105,9 @@
       },
       "database_size": {
         "name": "Veľkosť databázy"
+      },
+      "suggestions": {
+        "name": "Návrhy"
       }
     }
   }

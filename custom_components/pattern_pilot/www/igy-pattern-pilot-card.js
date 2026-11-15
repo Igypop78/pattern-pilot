@@ -62,12 +62,38 @@
     'Načítavam…': 'Loading…',
     'Nadpis': 'Title',
     'Zobraziť': 'Show',
-    'Priebeh učenia a čo Pattern Pilot vidí v dome.': 'Learning progress and what Pattern Pilot sees in your home.',
+    'Návrhy automatizácií, priebeh učenia a čo Pattern Pilot vidí v dome.': 'Automation suggestions, learning progress and what Pattern Pilot sees in your home.',
     'teraz': 'now',
+    'Návrhy': 'Suggestions', 'Prehľad': 'Overview', 'Prijaté': 'Accepted', 'Odmietnuté': 'Dismissed',
+    '{0} nové návrhy': '{0} new suggestions', '1 nový návrh': '1 new suggestion',
+    'Časový návyk': 'Time habit', 'Po A nasleduje B': 'A then B', 'Vylepšenie automatizácie': 'Improve automation',
+    'zapnúť': 'turn on', 'vypnúť': 'turn off', 'otvoriť': 'open', 'zatvoriť': 'close', 'aktivovať': 'activate',
+    'okolo {0}': 'around {0}', 'v pracovné dni': 'on workdays', 'cez víkend': 'at weekends', ', keď je tma': ' when it is dark',
+    'pri „{0}“': 'on “{0}”', 'príchod domov': 'arrives home', 'odchod': 'leaves',
+    'Robíš to ručne medzi {0} a {1}': 'You do it by hand between {0} and {1}',
+    '{0} z {1} dní': '{0} of {1} days',
+    'v spätnom teste 0 zbytočných spustení': 'backtest: 0 needless runs',
+    'v spätnom teste {0}× týždenne zbytočne': 'backtest: {0}× a week for nothing',
+    'Do 90 s po „{0}“ to urobíš ručne': 'Within 90 s after “{0}” you do it by hand',
+    '{0} z {1}×': '{0} of {1}×', 'po {0} % udalostí': 'after {0} % of them',
+    'často ju rušíš': 'you often revert it',
+    'Po jej zásahu si do 2 min prepol {0} na „{1}“': 'Within 2 min after it ran you switched {0} to “{1}”',
+    '{0}× za 14 dní': '{0}× in 14 days',
+    'Prijať': 'Accept', 'Upraviť': 'Edit', 'Teraz nie': 'Not now', 'Nikdy': 'Never', 'Otvoriť automatizáciu': 'Open automation',
+    'Vyriešené': 'Done', 'Otvoriť': 'Open', 'Vrátiť': 'Undo', 'Obnoviť': 'Restore', 'odložené': 'snoozed', 'nikdy': 'never',
+    'Analyzovať teraz': 'Analyse now', 'Analyzujem…': 'Analysing…',
+    'Predbežné návrhy – zatiaľ {0} z {1} dní dát, budú presnejšie.': 'Preliminary – {0} of {1} days of data so far, they will get more accurate.',
+    'Zatiaľ žiadne návrhy': 'No suggestions yet',
+    'Analýza beží každú noc. Môžeš ju spustiť aj teraz.': 'The analysis runs every night. You can also run it now.',
+    'Posledná analýza {0}': 'Last analysis {0}',
+    'Posledných 14 dní: vzor sa stal · deň bez vzoru · nesledovaný deň': 'Last 14 days: pattern happened · day without it · day not counted',
+    'Automatizácia vytvorená': 'Automation created', 'Nepodarilo sa: {0}': 'Failed: {0}',
+    'Upraviť vytvorí automatizáciu a otvorí ju v editore': 'Edit creates the automation and opens it in the editor',
+    'Zatiaľ nič.': 'Nothing yet.',
     'pred {0} min': '{0} min ago'
   };
 
-  const VERSION = '0.1.3';
+  const VERSION = '0.2.0';
   const C = { human: '#0a84ff', physical: '#ff9f0a', automation: '#30d158', system: '#8e8e93', external: '#bf5af2', device: '#64d2ff' };
   const ACTOR_ORDER = ['human', 'physical', 'automation', 'device', 'system', 'external'];
   const ACTOR_T = { human: 'ty (aplikácia, hlas)', physical: 'mimo HA', automation: 'automatizácie', device: 'programy zariadení', system: 'iné integrácie', external: 'vylúčení' };
@@ -149,7 +175,44 @@
     .ev .x small { color: var(--secondary-text-color); margin-left: 4px; }
     .ev .x .ov { color: #ff6961; font-size: 11px; margin-left: 4px; }
     .empty, .err { font-size: 13px; color: var(--secondary-text-color); padding: 6px 2px; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: -2px 0 10px; }
+    .tab { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 99px; border: 1px solid rgba(127,127,127,.25); background: none; color: var(--secondary-text-color); cursor: pointer; }
+    .tab.on { background: rgba(10,132,255,.14); border-color: rgba(10,132,255,.45); color: #0a84ff; }
+    .tab b { font-weight: 600; margin-left: 3px; }
+    .chip.new { color: #30d158; background: rgba(48,209,88,.15); }
+    .sg { border-radius: 16px; background: var(--hc-surface, rgba(127,127,127,.1)); box-shadow: inset 0 0 0 1px var(--hc-surface-line, transparent); padding: 12px 14px; }
+    .sg + .sg { margin-top: 8px; }
+    .sg .top { display: flex; gap: 10px; align-items: flex-start; }
+    .sg .ic { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex: none; }
+    .sg .ic svg { width: 18px; height: 18px; }
+    .sg .ti { font-size: 14px; font-weight: 500; line-height: 1.4; color: var(--primary-text-color); }
+    .sg .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px; margin-top: 4px; }
+    .sg .evi { font-size: 12px; color: var(--secondary-text-color); margin: 8px 0 7px; line-height: 1.5; }
+    .strip { display: flex; gap: 4px; margin-bottom: 10px; }
+    .strip i { width: 14px; height: 14px; border-radius: 4px; background: rgba(127,127,127,.18); }
+    .strip i.h { background: #0a84ff; } .strip i.e { background: rgba(10,132,255,.2); }
+    .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+    .btn { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 99px; border: 1px solid rgba(127,127,127,.3); background: none; color: var(--primary-text-color); cursor: pointer; }
+    .btn.pri { background: #0a84ff; border-color: #0a84ff; color: #fff; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .note { font-size: 12px; color: var(--secondary-text-color); padding: 8px 12px; border-radius: 12px; background: rgba(255,159,10,.12); margin-bottom: 8px; line-height: 1.45; }
+    .foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--secondary-text-color); margin-top: 10px; }
+    .foot .btn { margin-left: auto; font-size: 12px; padding: 4px 10px; }
+    .lst { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid rgba(127,127,127,.14); font-size: 13px; }
+    .lst:first-of-type { border-top: 0; }
+    .lst .n { flex: 1; min-width: 0; color: var(--primary-text-color); line-height: 1.35; padding: 6px 0; }
+    .lst .n small { display: block; color: var(--secondary-text-color); font-size: 11.5px; }
+    .lst .btn { font-size: 12px; padding: 4px 10px; flex: none; }
+    .emptybox { text-align: center; padding: 18px 10px; }
+    .emptybox b { display: block; font-size: 15px; font-weight: 600; color: var(--primary-text-color); margin-bottom: 4px; }
+    .emptybox span { display: block; font-size: 12.5px; color: var(--secondary-text-color); margin-bottom: 12px; }
   `;
+  const KIND = {
+    time: { t: 'Časový návyk', c: '#ff9f0a', bg: 'rgba(255,159,10,.16)', i: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>' },
+    trigger: { t: 'Po A nasleduje B', c: '#bf5af2', bg: 'rgba(191,90,242,.16)', i: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>' },
+    improve: { t: 'Vylepšenie automatizácie', c: '#ff453a', bg: 'rgba(255,69,58,.15)', i: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 7h9M18 7h1M5 17h3M12 17h7"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>' }
+  };
+  const VERB = { on: 'zapnúť', off: 'vypnúť', open: 'otvoriť', closed: 'zatvoriť', activated: 'aktivovať' };
 
   class IgyPatternPilotCard extends HTMLElement {
     static getConfigElement() { return document.createElement('igy-pattern-pilot-card-editor'); }
@@ -167,8 +230,13 @@
     async _load() {
       if (!this._hass || this._busy) return;
       this._busy = true;
-      try { this._data = await this._hass.callWS({ type: 'pattern_pilot/overview' }); this._err = null; }
-      catch (e) { this._err = e; }
+      try {
+        const [ov, sg] = await Promise.all([
+          this._hass.callWS({ type: 'pattern_pilot/overview' }),
+          this._hass.callWS({ type: 'pattern_pilot/suggestions' }).catch(() => null)
+        ]);
+        this._data = ov; this._sug = sg; this._err = null;
+      } catch (e) { this._err = e; }
       this._busy = false; this._render();
     }
 
@@ -215,6 +283,8 @@
         this.attachShadow({ mode: 'open' });
         this.shadowRoot.innerHTML = `<style>${CSS}</style><ha-card><div id="c"></div></ha-card>`;
         this.shadowRoot.querySelector('ha-card').addEventListener('click', (ev) => {
+          const tb = ev.target.closest('[data-tab]'); if (tb) { this._tab = tb.dataset.tab; this._render(); return; }
+          const ac = ev.target.closest('[data-act]'); if (ac) { if (!ac.disabled) this._act(ac.dataset.act, ac.dataset.id); return; }
           const el = ev.target.closest('[data-more]'); if (el && el.dataset.more) this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: el.dataset.more }, bubbles: true, composed: true }));
         });
       }
@@ -225,12 +295,30 @@
         return this._set(h);
       }
       const ready = d.status === 'ready';
-      h += `<span class="chip ${ready ? 'ready' : 'collecting'}">${ready ? _('Pripravený') : _('Zbiera dáta')}</span></div>`;
+      const items = (this._sug && this._sug.suggestions) || [];
+      const fresh = items.filter((x) => x.status === 'new');
+      if (!this._tab) this._tab = fresh.length ? 'sug' : 'ov';
+      const chip = fresh.length ? `<span class="chip new">${fresh.length === 1 ? _('1 nový návrh') : _('{0} nové návrhy', fresh.length)}</span>`
+        : `<span class="chip ${ready ? 'ready' : 'collecting'}">${ready ? _('Pripravený') : _('Zbiera dáta')}</span>`;
+      h += chip + `</div>`;
+      const acc = items.filter((x) => x.status === 'accepted'), rej = items.filter((x) => x.status === 'rejected' || x.status === 'snoozed');
+      const tab = (k, label, n) => `<button class="tab${this._tab === k ? ' on' : ''}" data-tab="${k}">${label}${n ? `<b>${n}</b>` : ''}</button>`;
+      h += `<div class="tabs">${tab('sug', _('Návrhy'), fresh.length)}${tab('ov', _('Prehľad'))}${acc.length ? tab('acc', _('Prijaté'), acc.length) : ''}${rej.length ? tab('rej', _('Odmietnuté'), rej.length) : ''}</div>`;
+      if (this._tab === 'sug') h += this._renderSuggestions(fresh);
+      else if (this._tab === 'acc') h += this._renderList(acc, 'acc');
+      else if (this._tab === 'rej') h += this._renderList(rej, 'rej');
+      else h += this._renderOverview(d);
+      this._set(h);
+    }
+    _renderOverview(d) {
+      const c = this._cfg;
+      const ready = d.status === 'ready';
+      let h = '';
 
       // priebeh učenia
       const day = Math.min(d.days + 1, d.days_needed), pct = ready ? 100 : Math.max(3, (d.days + 0.5) / d.days_needed * 100);
       h += `<div class="box"><div class="p1"><div class="big">${ready ? this._n(d.days) : `${_('Deň')} ${day}`}<small>${ready ? '' : _('z {0}', d.days_needed)}</small></div>`
-        + `<div class="rt">${ready ? `<b>${_('Dosť dát na analýzu')}</b>${_('Návrhy automatizácií prídu v ďalšej verzii.')}` : d.ready_from ? `<b>${_('Návrhy od {0}', this._date(d.ready_from))}</b>` : ''}</div></div>`
+        + `<div class="rt">${ready ? `<b>${_('Dosť dát na analýzu')}</b>` : d.ready_from ? `<b>${_('Návrhy od {0}', this._date(d.ready_from))}</b>` : ''}</div></div>`
         + `<div class="bar${ready ? ' done' : ''}"><i style="width:${pct.toFixed(1)}%"></i></div>`
         + `<div class="facts"><span>${_('{0} udalostí', `<b>${this._n(d.events_total)}</b>`)}</span>`
         + `<span>${_('{0} z {1} senzorov naučených', `<b>${this._n(d.sensors_ready)}</b>`, this._n(d.sensors_watched))}</span>`
@@ -276,7 +364,100 @@
             return `<div class="ev" data-more="${esc(e.entity_id)}"><span class="t">${this._time(e.ts)}</span><span class="a" style="background:${e.kind === 'signal' ? '#64d2ff' : col}">${ACT_ICON[k] || ACT_ICON.device}</span><span class="x">${this._evText(e)}</span></div>`; }).join('')
             : `<div class="empty">${_('Zatiaľ nič.')}</div>`) + `</div>`;
       }
-      this._set(h);
+      return h;
+    }
+
+    _short(id) {
+      const n = this._name(id), a = this._area(id);
+      return a && n.toLowerCase().startsWith(a.toLowerCase() + ' ') ? n.slice(a.length + 1) : n;
+    }
+    _sugText(s) {
+      const a = this._area(s.entity_id), pre = a ? `${esc(a)} – ` : '';
+      const verb = _(VERB[s.action] || s.action), what = esc(this._short(s.entity_id));
+      const strip = (s.strip || []).map((v) => `<i class="${v === 2 ? 'h' : v === 1 ? 'e' : ''}"></i>`).join('');
+      if (s.kind === 'time') {
+        const days = s.days === 'workday' ? ' ' + _('v pracovné dni') : s.days === 'weekend' ? ' ' + _('cez víkend') : '';
+        return { title: `${pre}${verb} ${what} ${_('okolo {0}', s.at)}${days}${s.dark ? _(', keď je tma') : ''}`,
+          evi: [_('Robíš to ručne medzi {0} a {1}', s.window[0], s.window[1]), _('{0} z {1} dní', s.hits, s.eligible),
+            s.false_per_week ? _('v spätnom teste {0}× týždenne zbytočne', this._n(s.false_per_week, 1)) : _('v spätnom teste 0 zbytočných spustení')].join(' · '), strip };
+      }
+      if (s.kind === 'trigger') {
+        let tn = esc(this._name(s.trigger_entity));
+        if (s.trigger_entity.startsWith('person.')) tn = `${tn}: ${s.trigger_state === 'home' ? _('príchod domov') : _('odchod')}`;
+        const win = s.window ? ` ${s.window[0]}–${s.window[1]}` : '';
+        return { title: `${pre}${verb} ${what} ${_('pri „{0}“', tn)}${win}`,
+          evi: [_('Do 90 s po „{0}“ to urobíš ručne', tn), _('{0} z {1}×', s.hits, s.total), _('po {0} % udalostí', Math.round(s.precision * 100))].join(' · '), strip };
+      }
+      return { title: `${esc(this._name(s.automation))}: ${_('často ju rušíš')}`,
+        evi: [_('Po jej zásahu si do 2 min prepol {0} na „{1}“', esc(this._name(s.entity_id)), esc(this._stateText(s.action))), _('{0}× za 14 dní', s.hits)].join(' · '), strip };
+    }
+    _renderSuggestions(list) {
+      const sg = this._sug || {}, busy = this._busyId;
+      let h = '';
+      if (sg.preliminary && list.length) h += `<div class="note">${_('Predbežné návrhy – zatiaľ {0} z {1} dní dát, budú presnejšie.', sg.days, sg.days_needed)}</div>`;
+      if (!list.length) {
+        h += `<div class="box emptybox"><b>${_('Zatiaľ žiadne návrhy')}</b><span>${_('Analýza beží každú noc. Môžeš ju spustiť aj teraz.')}</span>`
+          + `<button class="btn" data-act="analyze"${this._analyzing ? ' disabled' : ''}>${this._analyzing ? _('Analyzujem…') : _('Analyzovať teraz')}</button></div>`;
+      }
+      h += list.map((s) => {
+        const k = KIND[s.kind] || KIND.time, t = this._sugText(s), dis = busy === s.id ? ' disabled' : '';
+        const btns = s.kind === 'improve'
+          ? `<button class="btn pri" data-act="open" data-id="${s.id}"${dis}>${_('Otvoriť automatizáciu')}</button><button class="btn" data-act="done" data-id="${s.id}"${dis}>${_('Vyriešené')}</button>`
+          : `<button class="btn pri" data-act="accept" data-id="${s.id}"${dis}>${_('Prijať')}</button><button class="btn" data-act="edit" data-id="${s.id}" title="${esc(_('Upraviť vytvorí automatizáciu a otvorí ju v editore'))}"${dis}>${_('Upraviť')}</button>`;
+        return `<div class="sg"><div class="top"><div class="ic" style="background:${k.bg};color:${k.c}">${k.i}</div><div><div class="ti">${t.title}</div>`
+          + `<span class="tag" style="background:${k.bg};color:${k.c}">${_(k.t)}</span></div></div><div class="evi">${t.evi}</div><div class="strip">${t.strip}</div>`
+          + `<div class="acts">${btns}<button class="btn" data-act="snooze" data-id="${s.id}"${dis}>${_('Teraz nie')}</button><button class="btn" data-act="reject" data-id="${s.id}"${dis}>${_('Nikdy')}</button></div></div>`;
+      }).join('');
+      if (list.length || sg.last_analysis) {
+        h += `<div class="foot">${list.length ? `<span>${_('Posledných 14 dní: vzor sa stal · deň bez vzoru · nesledovaný deň')}</span>` : ''}`
+          + (sg.last_analysis ? `<span>${_('Posledná analýza {0}', new Date(sg.last_analysis).toLocaleString(this._loc(), { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>` : '')
+          + (list.length ? `<button class="btn" data-act="analyze"${this._analyzing ? ' disabled' : ''}>${this._analyzing ? _('Analyzujem…') : _('Analyzovať teraz')}</button>` : '') + `</div>`;
+      }
+      return h;
+    }
+    _renderList(list, mode) {
+      return `<div class="box">` + list.map((s) => {
+        const t = this._sugText(s), k = KIND[s.kind] || KIND.time;
+        const sub = mode === 'rej' ? (s.status === 'snoozed' ? _('odložené') : _('nikdy')) : _(k.t);
+        const btn = mode === 'acc'
+          ? (s.automation_id ? `<button class="btn" data-act="openid" data-id="${s.id}">${_('Otvoriť')}</button>` : '') + `<button class="btn" data-act="restore" data-id="${s.id}">${_('Vrátiť')}</button>`
+          : `<button class="btn" data-act="restore" data-id="${s.id}">${_('Obnoviť')}</button>`;
+        return `<div class="lst"><div class="n">${t.title}<small>${sub}</small></div>${btn}</div>`;
+      }).join('') + `</div>`;
+    }
+
+    _nav(path) { history.pushState(null, '', path); window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } })); }
+    _toast(msg) { this.dispatchEvent(new CustomEvent('hass-notification', { detail: { message: msg }, bubbles: true, composed: true })); }
+    async _status(id, status, automation_id) {
+      const msg = { type: 'pattern_pilot/suggestion/update', suggestion_id: id, status };
+      if (automation_id) msg.automation_id = automation_id;
+      this._sug = await this._hass.callWS(msg);
+    }
+    async _act(act, id) {
+      if (act === 'analyze') {
+        this._analyzing = true; this._render();
+        try { this._sug = await this._hass.callWS({ type: 'pattern_pilot/analyze' }); } catch (e) { this._toast(_('Nepodarilo sa: {0}', e.message || e)); }
+        this._analyzing = false; this._render(); return;
+      }
+      const s = ((this._sug && this._sug.suggestions) || []).find((x) => x.id === id); if (!s) return;
+      this._busyId = id; this._render();
+      try {
+        if (act === 'accept' || act === 'edit') {
+          const newId = String(Date.now());
+          await this._hass.callApi('POST', `config/automation/config/${newId}`, s.automation);
+          await this._status(id, 'accepted', newId);
+          this._toast(_('Automatizácia vytvorená'));
+          if (act === 'edit') this._nav(`/config/automation/edit/${newId}`);
+        } else if (act === 'open') {
+          if (s.automation_config_id) this._nav(`/config/automation/edit/${s.automation_config_id}`);
+        } else if (act === 'openid') {
+          this._nav(`/config/automation/edit/${s.automation_id}`);
+        } else if (act === 'done') await this._status(id, 'accepted');
+        else if (act === 'snooze') await this._status(id, 'snoozed');
+        else if (act === 'reject') await this._status(id, 'rejected');
+        else if (act === 'restore') await this._status(id, 'new');
+      } catch (e) { this._toast(_('Nepodarilo sa: {0}', (e && (e.body && e.body.message || e.message)) || e)); }
+      this._busyId = null; this._render();
     }
     _set(h) { const box = this.shadowRoot.getElementById('c'); if (box.__h !== h) { box.__h = h; box.innerHTML = h; } }
   }
@@ -320,6 +501,6 @@
   }
   window.customCards = window.customCards || [];
   if (!window.customCards.some((c) => c.type === 'igy-pattern-pilot-card'))
-    window.customCards.push({ type: 'igy-pattern-pilot-card', name: 'Igy Pattern Pilot Card', description: _('Priebeh učenia a čo Pattern Pilot vidí v dome.'), preview: false, documentationURL: 'https://github.com/Igypop78/pattern-pilot' });
+    window.customCards.push({ type: 'igy-pattern-pilot-card', name: 'Igy Pattern Pilot Card', description: _('Návrhy automatizácií, priebeh učenia a čo Pattern Pilot vidí v dome.'), preview: false, documentationURL: 'https://github.com/Igypop78/pattern-pilot' });
   console.info('%c IGY-PATTERN-PILOT-CARD %c ' + VERSION + ' ', 'background:#30d158;color:#000;border-radius:3px 0 0 3px', 'background:#333;color:#fff;border-radius:0 3px 3px 0');
 })();

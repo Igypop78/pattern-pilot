@@ -11,7 +11,17 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, MIN_DAYS_FOR_ANALYSIS, VERSION
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+from .const import (
+    DOMAIN,
+    MIN_DAYS_FOR_ANALYSIS,
+    SIGNAL_SUGGESTIONS_UPDATED,
+    SNOOZE_DAYS,
+    STATUS_NEW,
+    SUGGESTION_STATUSES,
+    VERSION,
+)
 
 HOURLY_DAYS = 14
 
@@ -23,6 +33,9 @@ def async_register(hass: HomeAssistant) -> None:
         return
     hass.data[f"{DOMAIN}_ws"] = True
     websocket_api.async_register_command(hass, ws_overview)
+    websocket_api.async_register_command(hass, ws_suggestions)
+    websocket_api.async_register_command(hass, ws_update)
+    websocket_api.async_register_command(hass, ws_analyze)
 
 
 def _entry_data(hass: HomeAssistant) -> Any:
@@ -100,3 +113,77 @@ async def ws_overview(
             **ov,
         },
     )
+
+
+async def _suggestions_payload(hass: HomeAssistant, data: Any) -> dict[str, Any]:
+    items = await hass.async_add_executor_job(data.store.list_suggestions)
+    return {
+        "suggestions": items,
+        "last_analysis": data.last_analysis,
+        "analyzing": data.analyzing,
+        "days": data.stats.days,
+        "days_needed": MIN_DAYS_FOR_ANALYSIS,
+        "preliminary": data.stats.days < MIN_DAYS_FOR_ANALYSIS,
+    }
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/suggestions"})
+@websocket_api.async_response
+async def ws_suggestions(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """All suggestions with their status."""
+    data = _entry_data(hass)
+    if data is None:
+        connection.send_error(msg["id"], "not_loaded", "Pattern Pilot is not loaded")
+        return
+    connection.send_result(msg["id"], await _suggestions_payload(hass, data))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/suggestion/update",
+        vol.Required("suggestion_id"): str,
+        vol.Required("status"): vol.In(SUGGESTION_STATUSES),
+        vol.Optional("automation_id"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_update(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Accept / snooze / reject / restore a suggestion."""
+    data = _entry_data(hass)
+    if data is None:
+        connection.send_error(msg["id"], "not_loaded", "Pattern Pilot is not loaded")
+        return
+    ok = await hass.async_add_executor_job(
+        data.store.set_suggestion_status,
+        msg["suggestion_id"],
+        msg["status"],
+        msg.get("automation_id"),
+        SNOOZE_DAYS,
+    )
+    if not ok:
+        connection.send_error(msg["id"], "not_found", "Suggestion not found")
+        return
+    items = await hass.async_add_executor_job(data.store.list_suggestions)
+    data.suggestions_new = sum(1 for s in items if s["status"] == STATUS_NEW)
+    async_dispatcher_send(hass, SIGNAL_SUGGESTIONS_UPDATED)
+    connection.send_result(msg["id"], await _suggestions_payload(hass, data))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/analyze"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_analyze(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Run the analysis now."""
+    data = _entry_data(hass)
+    if data is None:
+        connection.send_error(msg["id"], "not_loaded", "Pattern Pilot is not loaded")
+        return
+    await data.async_analyze(hass)
+    connection.send_result(msg["id"], await _suggestions_payload(hass, data))

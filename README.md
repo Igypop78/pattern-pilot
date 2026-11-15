@@ -9,8 +9,8 @@ sequences ("after the shower the fan goes on") and conditions ("only when it is 
 tests each idea against your own history and shows it with the evidence.
 Nothing runs until you press *Accept*. Everything stays local – no cloud, no LLM required.
 
-> **Status: v0.1.x – data collection.** This version only records. Suggestions arrive in v0.2+,
-> once there are ~3 weeks of data. Install it now so it has something to learn from.
+> **Status: v0.2 – first suggestions** (time habits, "A then B", improving automations you keep reverting).
+> Suggestions get reliable after ~3 weeks of data; before that they are marked as preliminary.
 
 ## How it works
 
@@ -24,7 +24,7 @@ Nothing runs until you press *Accept*. Everything stays local – no cloud, no L
    (country from Home Assistant settings), sun elevation, outdoor temperature, how many people are home.
 4. Keeps its **own history** (`/config/pattern_pilot.db`, default 120 days) – independent of the recorder,
    whose default 10 days is too short to find habits.
-5. *(v0.2+)* Nightly analysis → suggestions → backtest → card with **Accept / Edit / Not now / Never**.
+5. **Nightly analysis** → suggestions → backtest → card with **Accept / Edit / Not now / Never**.
 
 ## Installation
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0] – 2026-11-15
+
+**First suggestions.** Pattern Pilot now analyses the recorded history every night (and 3 minutes after
+the first start of this version) and suggests automations – each one backtested on your own data.
+
+- **Time habits** – the same manual action at a similar time (any day / workdays / weekends, optionally
+  only when it is dark). Shown only if it happened on ≥ 5 days, on ≥ 60 % of the eligible days and would
+  fire for nothing at most twice a week. Skipped when an automation already does it.
+- **A then B** – after a motion / door / button / person arriving, you do the same thing by hand within
+  90 s (≥ 5×, ≥ 50 % of those actions, after ≥ 40 % of the triggers in that time range).
+- **Improve an automation** – an automation you reverted by hand within 2 minutes at least 3× in 14 days.
+- Safety: locks, alarms, valves and garage / gate / door covers are never suggested; excluded entities never.
+- **Card:** tabs *Suggestions · Overview · Accepted · Dismissed*. Each suggestion shows the evidence
+  and a 14-day strip. *Accept* creates the automation (named "Room – what it does"), *Edit* creates it and
+  opens the editor, *Not now* hides it for 30 days, *Never* for good. Decisions survive new analyses.
+  *Analyse now* runs the analysis on demand. Before 21 days of data the suggestions are marked preliminary.
+- New sensor `sensor.pattern_pilot_suggestions` (number of new suggestions) and a notification when new
+  ones appear.
+- WebSocket: `pattern_pilot/suggestions`, `pattern_pilot/suggestion/update`, `pattern_pilot/analyze`.
+
 ## [0.1.6] – 2026-11-15
 
 - **Zigbee2MQTT groups really matched.** Matching stopped at the first device with a non-standard

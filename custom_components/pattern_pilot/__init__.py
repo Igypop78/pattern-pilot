@@ -15,7 +15,11 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.util import dt as dt_util
 
 from .collector import Collector
@@ -33,6 +37,7 @@ from .const import (
     VERSION,
 )
 from .store import EventStore, StoreStats
+from .suggest import async_run_analysis
 from .websocket import async_register as async_register_ws
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,6 +57,20 @@ class PatternPilotData:
     collector: Collector
     stats: StoreStats = field(default_factory=StoreStats)
     last_maintenance: str | None = None
+    last_analysis: str | None = None
+    suggestions_new: int = 0
+    analyzing: bool = False
+    entry: ConfigEntry | None = None
+
+    async def async_analyze(self, hass: HomeAssistant) -> int:
+        """Run the analysis now (one at a time)."""
+        if self.analyzing:
+            return self.suggestions_new
+        self.analyzing = True
+        try:
+            return await async_run_analysis(hass, self, dict(self.entry.options) if self.entry else {})
+        finally:
+            self.analyzing = False
 
 
 type PatternPilotConfigEntry = ConfigEntry[PatternPilotData]
@@ -77,8 +96,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
     store = EventStore(hass.config.path(DB_FILENAME))
     await hass.async_add_executor_job(store.open)
     collector = Collector(hass, entry, store)
-    data = PatternPilotData(store=store, collector=collector)
+    data = PatternPilotData(store=store, collector=collector, entry=entry)
     entry.runtime_data = data
+    data.last_analysis = await hass.async_add_executor_job(store.meta_get, "last_analysis")
+    data.suggestions_new = sum(
+        1 for s in await hass.async_add_executor_job(store.list_suggestions) if s["status"] == "new"
+    )
 
     async def refresh_stats(_now=None) -> None:
         day_start = dt_util.start_of_local_day().timestamp()
@@ -96,6 +119,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
         data.last_maintenance = dt_util.now().isoformat()
         _LOGGER.debug("Pattern Pilot maintenance: %s old events removed", removed)
         await refresh_stats()
+        try:
+            await data.async_analyze(hass)
+        except Exception:  # noqa: BLE001 - never break HA
+            _LOGGER.exception("Pattern Pilot: analysis failed")
 
     async def save_profiles(_now=None) -> None:
         await collector.async_save_profiles()
@@ -113,6 +140,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: PatternPilotConfigEntry)
         async_track_time_interval(hass, flush_and_refresh, STATS_INTERVAL),
         async_track_time_interval(hass, save_profiles, PROFILE_INTERVAL),
     ]
+
+    if data.last_analysis is None:
+        # first start with this version: analyse a few minutes after start-up
+        async def first_analysis(_now=None) -> None:
+            await refresh_stats()
+            try:
+                await data.async_analyze(hass)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Pattern Pilot: analysis failed")
+
+        timers.append(async_call_later(hass, 180, first_analysis))
 
     def cancel_timers() -> None:
         while timers:

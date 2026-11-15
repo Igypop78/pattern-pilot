@@ -105,6 +105,9 @@
       },
       "database_size": {
         "name": "Database size"
+      },
+      "suggestions": {
+        "name": "Suggestions"
       }
     }
   }

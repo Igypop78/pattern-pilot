@@ -91,7 +91,7 @@ def test_migrate_schema_1(tmp_path):
     store.open()
     cols = {r[1] for r in store.conn.execute("PRAGMA table_info(context)")}
     assert "sun_elevation" in cols
-    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "4"
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "5"
     store.write([_row(time.time(), context={"day_type": "holiday", "sun_elevation": 12.5})])
     assert store.conn.execute("SELECT sun_elevation FROM context").fetchone()[0] == 12.5
     store.close()
@@ -136,7 +136,7 @@ def test_migrate_legacy_to_compact(tmp_path):
     assert "entity_id" not in {r[1] for r in store.conn.execute("PRAGMA table_info(events)")}
     assert store.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 2
     assert sorted(r[0] for r in store.conn.execute("SELECT event_id FROM context")) == [1, 3]
-    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "4"
+    assert store.conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0] == "5"
     # new writes reuse the entity numbers
     store.write([_row(400)])
     assert store.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 3
@@ -156,4 +156,29 @@ def test_area_update(tmp_path):
     r2.area = "garden"
     store.write([r2])
     assert store.conn.execute("SELECT area FROM entities").fetchone()[0] == "garden"
+    store.close()
+
+
+def test_suggestions_keep_decisions(tmp_path):
+    store = EventStore(str(tmp_path / "pp.db"))
+    store.open()
+    a = {"id": "a", "kind": "time", "score": 0.9}
+    b = {"id": "b", "kind": "trigger", "score": 0.5}
+    assert store.save_suggestions([a, b]) == 2
+    assert store.set_suggestion_status("a", "accepted", "123")
+    assert store.set_suggestion_status("b", "rejected")
+    # next analysis: a and b gone, c new → decisions stay, c added
+    assert store.save_suggestions([{"id": "c", "kind": "time", "score": 0.1}]) == 1
+    items = {s["id"]: s for s in store.list_suggestions()}
+    assert items["a"]["status"] == "accepted" and items["a"]["automation_id"] == "123"
+    assert items["b"]["status"] == "rejected"
+    # undecided suggestion that no longer holds disappears
+    assert store.save_suggestions([]) == 0
+    assert "c" not in {s["id"] for s in store.list_suggestions()}
+    # snooze expires
+    store.save_suggestions([{"id": "d", "kind": "time"}])
+    store.set_suggestion_status("d", "snoozed", snooze_days=0)
+    store.save_suggestions([{"id": "d", "kind": "time"}], now=time.time() + 10)
+    assert {s["id"]: s for s in store.list_suggestions()}["d"]["status"] == "new"
+    assert not store.set_suggestion_status("zzz", "accepted")
     store.close()

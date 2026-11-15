@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS context (
     people_home INTEGER,
     sun_elevation REAL
 );
+CREATE TABLE IF NOT EXISTS suggestions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    data TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    automation_id TEXT,
+    created REAL NOT NULL,
+    updated REAL NOT NULL,
+    snooze_until REAL
+);
 CREATE TABLE IF NOT EXISTS profiles (
     entity_id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -122,8 +132,11 @@ class EventStore:
                     "INSERT INTO meta (key, value) VALUES ('schema', ?), ('created', ?)",
                     (str(SCHEMA_VERSION), str(time.time())),
                 )
-            elif int(row[0]) < SCHEMA_VERSION:
-                self._migrate(conn, int(row[0]))
+            else:
+                if int(row[0]) < 4:
+                    self._migrate(conn, int(row[0]))
+                conn.executescript(_TABLES)  # new tables of later schemas
+                conn.execute("UPDATE meta SET value=? WHERE key='schema'", (str(SCHEMA_VERSION),))
             conn.commit()
             self._conn = conn
             self._ids = {
@@ -393,3 +406,110 @@ class EventStore:
             "signals_week": signals_week,
             "recent": recent,
         }
+
+    # -- analysis input ------------------------------------------------------------------
+    def analysis_rows(self, since: float) -> dict[str, list[tuple]]:
+        with self._lock:
+            c = self.conn
+            manual = c.execute(
+                "SELECT ev.ts, en.entity_id, en.domain, ev.new, cx.day_type, cx.sun FROM events ev"
+                " JOIN entities en ON en.id = ev.entity LEFT JOIN context cx ON cx.event_id = ev.id"
+                " WHERE ev.ts >= ? AND ev.kind = 'state' AND ev.actor IN ('human', 'physical')",
+                (since,),
+            ).fetchall()
+            triggers = c.execute(
+                "SELECT ev.ts, en.entity_id, en.domain, ev.new FROM events ev"
+                " JOIN entities en ON en.id = ev.entity"
+                " WHERE ev.ts >= ? AND ev.kind = 'state' AND en.domain IN ('binary_sensor', 'person', 'event')",
+                (since,),
+            ).fetchall()
+            automated = c.execute(
+                "SELECT ev.ts, en.entity_id, en.domain, ev.new FROM events ev"
+                " JOIN entities en ON en.id = ev.entity"
+                " WHERE ev.ts >= ? AND ev.kind = 'state' AND ev.actor = 'automation'",
+                (since,),
+            ).fetchall()
+            overrides = c.execute(
+                "SELECT ev.ts, en.entity_id, ev.new, ev.ref FROM events ev"
+                " JOIN entities en ON en.id = ev.entity"
+                " WHERE ev.ts >= ? AND ev.override = 1 AND ev.ref IS NOT NULL",
+                (since,),
+            ).fetchall()
+        return {"manual": manual, "triggers": triggers, "automated": automated, "overrides": overrides}
+
+    # -- suggestions ---------------------------------------------------------------------
+    def save_suggestions(self, items: list[dict], now: float | None = None) -> int:
+        """Store the result of an analysis; keeps decisions. Returns the number of new ones."""
+        now = now or time.time()
+        with self._lock:
+            c = self.conn
+            current = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, status, snooze_until FROM suggestions")}
+            ids = set()
+            for s in items:
+                ids.add(s["id"])
+                if s["id"] in current:
+                    c.execute(
+                        "UPDATE suggestions SET data=?, updated=? WHERE id=?",
+                        (json.dumps(s, ensure_ascii=False), now, s["id"]),
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO suggestions (id, kind, data, status, created, updated) VALUES (?,?,?,?,?,?)",
+                        (s["id"], s["kind"], json.dumps(s, ensure_ascii=False), "new", now, now),
+                    )
+            # undecided suggestions that no longer hold disappear; decisions are kept
+            for sid, (status, _snooze) in current.items():
+                if sid not in ids and status == "new":
+                    c.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+            c.execute(
+                "UPDATE suggestions SET status='new', snooze_until=NULL"
+                " WHERE status='snoozed' AND snooze_until < ?",
+                (now,),
+            )
+            c.commit()
+            return c.execute("SELECT COUNT(*) FROM suggestions WHERE status='new'").fetchone()[0]
+
+    def list_suggestions(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT data, status, automation_id, created, updated, snooze_until FROM suggestions"
+            ).fetchall()
+        out = []
+        for data, status, automation_id, created, updated, snooze in rows:
+            try:
+                item = json.loads(data)
+            except ValueError:
+                continue
+            item.update(
+                status=status, automation_id=automation_id, created=created, updated=updated, snooze_until=snooze
+            )
+            out.append(item)
+        out.sort(key=lambda s: s.get("score", 0), reverse=True)
+        return out
+
+    def set_suggestion_status(
+        self, sid: str, status: str, automation_id: str | None = None, snooze_days: int = 30
+    ) -> bool:
+        now = time.time()
+        snooze = now + snooze_days * 86400 if status == "snoozed" else None
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE suggestions SET status=?, automation_id=COALESCE(?, automation_id),"
+                " snooze_until=?, updated=? WHERE id=?",
+                (status, automation_id, snooze, now, sid),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def meta_get(self, key: str) -> str | None:
+        with self._lock:
+            row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            self.conn.commit()

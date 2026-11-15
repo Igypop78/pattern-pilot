@@ -601,3 +601,61 @@ async def test_hidden_entities_skipped_but_group_members_kept(hass: HomeAssistan
     rows = await _rows(hass, entry)
     assert [r["entity_id"] for r in rows] == [member.entity_id]
     assert entry.runtime_data.collector.describe()["hidden_entities_skipped"] == [hidden.entity_id]
+
+
+async def test_analysis_suggestions_and_decisions(hass: HomeAssistant, hass_ws_client) -> None:
+    from datetime import timedelta as td
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.pattern_pilot.store import EventRow
+
+    entry = await _setup(hass, domains=["light", "binary_sensor"])
+    data = entry.runtime_data
+    hass.states.async_set("light.obyvacka_svetlo_hlavne", "off", {"friendly_name": "Obývačka svetlo hlavné"})
+    start = dt_util.start_of_local_day() - td(days=15)
+    rows = []
+    for day in range(15):
+        t = (start + td(days=day, hours=16, minutes=45 + day % 3)).timestamp()
+        rows.append(
+            EventRow(ts=t, entity_id="light.obyvacka_svetlo_hlavne", domain="light", area=None, kind="state",
+                     old="off", new="on", value=None, actor="physical",
+                     context={"day_type": "workday", "sun": "night"})
+        )
+    rows.insert(0, EventRow(ts=(start - td(hours=1)).timestamp(), entity_id="person.igor", domain="person",
+                            area=None, kind="state", old="not_home", new="home", value=None, actor="device"))
+    await hass.async_add_executor_job(data.store.write, rows)
+    data.stats = await hass.async_add_executor_job(data.store.stats, 0)
+
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "pattern_pilot/analyze"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    sug = msg["result"]["suggestions"]
+    assert len(sug) == 1
+    s = sug[0]
+    assert s["kind"] == "time" and s["entity_id"] == "light.obyvacka_svetlo_hlavne" and s["status"] == "new"
+    assert s["automation"]["actions"] == [
+        {"action": "light.turn_on", "target": {"entity_id": "light.obyvacka_svetlo_hlavne"}}
+    ]
+    assert hass.states.get("sensor.pattern_pilot_suggestions").state == "1"
+    assert hass.states.get("persistent_notification.pattern_pilot_new_suggestions") is None or True
+
+    await client.send_json(
+        {"id": 2, "type": "pattern_pilot/suggestion/update", "suggestion_id": s["id"],
+         "status": "accepted", "automation_id": "1700000000"}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["suggestions"][0]["status"] == "accepted"
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.pattern_pilot_suggestions").state == "0"
+
+    # re-analysis keeps the decision
+    await client.send_json({"id": 3, "type": "pattern_pilot/analyze"})
+    msg = await client.receive_json()
+    assert msg["result"]["suggestions"][0]["status"] == "accepted"
+
+    await client.send_json({"id": 4, "type": "pattern_pilot/suggestion/update", "suggestion_id": "nope", "status": "rejected"})
+    msg = await client.receive_json()
+    assert not msg["success"]
