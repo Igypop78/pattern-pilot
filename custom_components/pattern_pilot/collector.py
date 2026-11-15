@@ -115,6 +115,7 @@ class Collector:
         self.runs_throttled = 0
         self.groups_skipped = 0
         self._mirrored: set[str] | None = None
+        self._mirror_pairs: dict[str, set[str]] = {}
         self._members_cache: set[str] | None = None
         self.hidden_skipped: set[str] = set()
         self.groups.on_change = self._clear_caches
@@ -312,6 +313,8 @@ class Collector:
             return
         for entity_id in list(ids):
             ids |= self.groups.expand(entity_id)  # Zigbee2MQTT / HA groups → members
+        for entity_id in list(ids):
+            ids |= self._mirror_of(entity_id)  # command to the hidden switch also changes its light
         ts = event.time_fired.timestamp()
         for entity_id in ids:
             actor, user_id, ref = self._attribute(event.context, entity_id, "")
@@ -394,6 +397,7 @@ class Collector:
         if self._mirrored is None:
             ent_reg = er.async_get(self.hass)
             found: set[str] = set()
+            pairs: dict[str, set[str]] = {}
             for cfg in self.hass.config_entries.async_entries("switch_as_x"):
                 source = cfg.options.get("entity_id")
                 if not source:
@@ -402,10 +406,20 @@ class Collector:
                     resolved = er.async_resolve_entity_id(ent_reg, source)
                 except Exception:  # noqa: BLE001
                     resolved = None
-                if resolved:
-                    found.add(resolved)
+                if not resolved:
+                    continue
+                found.add(resolved)
+                for wrapper in er.async_entries_for_config_entry(ent_reg, cfg.entry_id):
+                    pairs.setdefault(resolved, set()).add(wrapper.entity_id)
+                    pairs.setdefault(wrapper.entity_id, set()).add(resolved)
             self._mirrored = found
+            self._mirror_pairs = pairs
         return self._mirrored
+
+    def _mirror_of(self, entity_id: str) -> set[str]:
+        """switch ↔ light / cover … created from it by a switch_as_x helper."""
+        self._mirrored_sources()
+        return self._mirror_pairs.get(entity_id, set())
 
     def is_ignored(self, entity_id: str) -> bool:
         """Would this entity be skipped today? (also applied to older recorded data)"""

@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "pattern_pilot"
 NAME: Final = "Pattern Pilot"
-VERSION: Final = "0.2.1"
+VERSION: Final = "0.2.2"
 
 DB_FILENAME: Final = "pattern_pilot.db"
 SCHEMA_VERSION: Final = 5

@@ -176,3 +176,16 @@ def test_merge_same_room_and_group():
     assert auto["alias"].startswith("Martin – glóbus a žiarovka – zapnúť okolo")
     assert {"action": "light.turn_on", "target": {"entity_id": "light.martin_globus"}} in auto["actions"]
     assert {"action": "switch.turn_on", "target": {"entity_id": "switch.martin_ziarovka"}} in auto["actions"]
+
+
+def test_changes_right_after_time_or_sun_automation_are_not_habits():
+    manual = [Manual(ts(d, 16, 20, 5), "light.spolocne_dvor_svetlo", "light", "on", "workday", "night") for d in range(15)]
+    runs = [(ts(d, 16, 20), "automation.dvor_svetlo_pri_zapade", "sun") for d in range(15)]
+    inp = make(manual)
+    inp.runs = runs
+    assert Analyzer(inp).run() == []
+    # a motion-triggered automation right before a real manual action does not hide it
+    manual = [Manual(ts(d, 16, 20, 5), "light.spolocne_dvor_svetlo", "light", "on", "workday", "night") for d in range(15)]
+    inp = make(manual)
+    inp.runs = [(ts(d, 16, 20), "automation.upozornenie", "state of binary_sensor.pohyb") for d in range(15)]
+    assert len(Analyzer(inp).run()) == 1

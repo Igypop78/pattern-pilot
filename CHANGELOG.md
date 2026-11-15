@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] – 2026-11-15
+
+Automations were suggested as habits (e.g. yard light at sunset, garden lanterns):
+- **No habits from automations.** A "manual" change within 15 s after a **time or sun automation** ran is
+  treated as done by that automation – this also cleans data recorded before attribution was exact
+  (and devices that report their state late without context).
+- **"Change device type of a switch" helpers:** a command to the hidden switch now also counts for the
+  light / cover created from it (and the other way round), so its state change is credited to the right
+  automation or person.
+
 ## [0.2.1] – 2026-11-15
 
 Better suggestions after the first real run (56 suggestions, many of them noise):

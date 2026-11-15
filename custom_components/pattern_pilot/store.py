@@ -435,7 +435,18 @@ class EventStore:
                 " WHERE ev.ts >= ? AND ev.override = 1 AND ev.ref IS NOT NULL",
                 (since,),
             ).fetchall()
-        return {"manual": manual, "triggers": triggers, "automated": automated, "overrides": overrides}
+            runs = c.execute(
+                "SELECT ev.ts, en.entity_id, ev.new FROM events ev JOIN entities en ON en.id = ev.entity"
+                " WHERE ev.ts >= ? AND ev.kind = 'run'",
+                (since,),
+            ).fetchall()
+        return {
+            "manual": manual,
+            "triggers": triggers,
+            "automated": automated,
+            "overrides": overrides,
+            "runs": runs,
+        }
 
     # -- suggestions ---------------------------------------------------------------------
     def save_suggestions(self, items: list[dict], now: float | None = None) -> int:

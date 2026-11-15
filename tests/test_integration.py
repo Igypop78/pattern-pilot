@@ -659,3 +659,33 @@ async def test_analysis_suggestions_and_decisions(hass: HomeAssistant, hass_ws_c
     await client.send_json({"id": 4, "type": "pattern_pilot/suggestion/update", "suggestion_id": "nope", "status": "rejected"})
     msg = await client.receive_json()
     assert not msg["success"]
+
+
+async def test_switch_as_x_command_pairs_wrapper(hass: HomeAssistant) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    ent_reg = er.async_get(hass)
+    src = ent_reg.async_get_or_create(
+        "switch", "test", "dvor", suggested_object_id="spolocne_dvor_svetlo_rele",
+        hidden_by=er.RegistryEntryHider.INTEGRATION,
+    )
+    cfg = MockConfigEntry(domain="switch_as_x", data={}, options={"entity_id": src.id, "target_domain": "light"})
+    cfg.add_to_hass(hass)
+    wrapper = ent_reg.async_get_or_create(
+        "light", "switch_as_x", "dvor_light", suggested_object_id="spolocne_dvor_svetlo", config_entry=cfg
+    )
+    entry = await _setup(hass, domains=["light", "switch"])
+    hass.states.async_set(wrapper.entity_id, "off")
+    await hass.async_block_till_done()
+    run_ctx = Context(parent_id="t")
+    hass.bus.async_fire("automation_triggered", {"entity_id": "automation.dvor", "name": "x", "source": "sun"}, context=run_ctx)
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "switch", "service": "turn_on", "service_data": {"entity_id": src.entity_id}},
+        context=run_ctx,
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(wrapper.entity_id, "on", context=Context())
+    await hass.async_block_till_done()
+    rows = [r for r in await _rows(hass, entry) if r["entity_id"] == wrapper.entity_id]
+    assert [(r["new"], r["actor"]) for r in rows] == [("on", "automation")]

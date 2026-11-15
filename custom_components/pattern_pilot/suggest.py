@@ -79,6 +79,7 @@ async def async_run_analysis(hass: HomeAssistant, data: PatternPilotData, option
         entities=entities,
         exclude=exclude | set(collector.exclude_entities),
         groups=groups,
+        runs=[tuple(r) for r in rows["runs"]],
     )
     results = await hass.async_add_executor_job(Analyzer(inp).run)
 

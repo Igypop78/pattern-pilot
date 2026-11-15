@@ -95,7 +95,7 @@
     'pred {0} min': '{0} min ago'
   };
 
-  const VERSION = '0.2.1';
+  const VERSION = '0.2.2';
   const C = { human: '#0a84ff', physical: '#ff9f0a', automation: '#30d158', system: '#8e8e93', external: '#bf5af2', device: '#64d2ff' };
   const ACTOR_ORDER = ['human', 'physical', 'automation', 'device', 'system', 'external'];
   const ACTOR_T = { human: 'ty (aplikácia, hlas)', physical: 'mimo HA', automation: 'automatizácie', device: 'programy zariadení', system: 'iné integrácie', external: 'vylúčení' };

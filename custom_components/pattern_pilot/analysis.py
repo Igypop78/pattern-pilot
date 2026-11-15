@@ -34,6 +34,7 @@ MIN_OVERRIDES = 3  # improve: reverts in the last 14 days
 REVERT_S = 30  # improve: reverted within this after the automation changed it
 DEVICE_LINK_S = 3  # trigger: B typically within this after A = device link, not a person
 MERGE_MIN = 10  # time habits of one room within this many minutes are merged
+SCHEDULED_RUN_S = 15  # a "manual" change this soon after a time / sun automation ran = that automation
 STRIP_DAYS = 14
 
 # what may be suggested and how (state → service)
@@ -104,6 +105,7 @@ class Input:
     entities: dict[str, EntityInfo] = field(default_factory=dict)
     exclude: set[str] = field(default_factory=set)
     groups: dict[str, set[str]] = field(default_factory=dict)  # group entity → members
+    runs: list[tuple[float, str, str | None]] = field(default_factory=list)  # (ts, automation, trigger source)
 
 
 def _sid(*parts: Any) -> str:
@@ -147,6 +149,19 @@ class Analyzer:
         ]
         self.dayset = set(self.days)
         self.day_types = {d: data.day_type(d) for d in self.days}
+        # Changes recorded before attribution was exact (or of devices that report late)
+        # can look manual although a time / sun automation did them: drop those.
+        scheduled = sorted(
+            ts for ts, _ref, source in data.runs if source and str(source).lower().startswith(("time", "sun"))
+        )
+        if scheduled:
+            kept = []
+            for m in data.manual:
+                i = bisect_right(scheduled, m.ts)
+                if i and m.ts - scheduled[i - 1] <= SCHEDULED_RUN_S:
+                    continue
+                kept.append(m)
+            data.manual = kept
 
     def local(self, ts: float) -> datetime:
         return datetime.fromtimestamp(ts, self.d.tz)
