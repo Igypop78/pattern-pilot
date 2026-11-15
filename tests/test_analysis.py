@@ -106,11 +106,19 @@ def test_trigger_ignored_when_motion_rarely_followed():
 
 
 def test_improvement_from_overrides():
-    ov = [Override(ts(d, 22, 0), "light.spalna_svetla", "off", "automation.spalna_synchronizacia_svetiel") for d in range(5, 14)]
-    res = Analyzer(make(overrides=ov)).improvements()
+    ref = "automation.spalna_synchronizacia_svetiel"
+    auto = [Trig(ts(d, 22, 0), "light.spalna_svetla", "light", "on") for d in range(5, 14)]
+    auto += [Trig(ts(d, 22, 0), "light.spalna_lampa", "light", "on") for d in range(5, 14)]
+    ov = [Override(ts(d, 22, 0, 10), "light.spalna_svetla", "off", ref) for d in range(5, 14)]
+    ov += [Override(ts(d, 22, 0, 12), "light.spalna_lampa", "off", ref) for d in range(5, 8)]
+    # turned off by hand 90 s later = leaving the room, not an undo
+    ov += [Override(ts(d, 22, 1, 30), "light.kupelna", "off", "automation.kupelna_pohyb") for d in range(5, 14)]
+    auto += [Trig(ts(d, 22, 0), "light.kupelna", "light", "on") for d in range(5, 14)]
+    res = Analyzer(make(automated=auto, overrides=ov)).improvements()
     assert len(res) == 1
-    assert res[0]["automation"] == "automation.spalna_synchronizacia_svetiel"
-    assert res[0]["hits"] == 9
+    assert res[0]["automation"] == ref
+    assert res[0]["hits"] == 12
+    assert res[0]["entity_ids"] == ["light.spalna_svetla", "light.spalna_lampa"]
 
 
 def test_build_automation_time_and_trigger():
@@ -127,3 +135,44 @@ def test_build_automation_time_and_trigger():
     assert auto["triggers"] == [{"trigger": "state", "entity_id": "binary_sensor.pohyb", "to": "on"}]
     assert {"condition": "time", "after": "06:10:00", "before": "07:30:00"} in auto["conditions"]
     assert build_automation({"kind": "improve", "entity_id": "light.a", "action": "off"}, None, None, "sk") is None
+
+
+def test_trigger_same_device_and_device_link_skipped():
+    manual, triggers = [], []
+    for day in range(15):
+        triggers.append(Trig(ts(day, 7, 0), "binary_sensor.zaluzie_input_0", "binary_sensor", "on"))
+        manual.append(Manual(ts(day, 7, 0, 20), "cover.spalna_zaluzie", "cover", "open", "workday", "day"))
+        triggers.append(Trig(ts(day, 19, 0), "binary_sensor.skrina_dvere", "binary_sensor", "on"))
+        manual.append(Manual(ts(day, 19, 0, 1), "light.skrina", "light", "on", "workday", "night"))
+    ents = {
+        "binary_sensor.zaluzie_input_0": EntityInfo("Input 0", device_id="shelly1"),
+        "cover.spalna_zaluzie": EntityInfo("Žalúzie", device_id="shelly1"),
+    }
+    assert Analyzer(make(manual, triggers, entities=ents)).trigger_habits() == []
+
+
+def test_merge_same_room_and_group():
+    manual = []
+    for day in range(15):
+        for eid in ("light.zahrada_lampas_1", "light.zahrada_lampas_2"):
+            manual.append(Manual(ts(day, 16, 30), eid, "light", "on", "workday", "night"))
+        manual.append(Manual(ts(day, 6, 45), "light.martin_globus", "light", "on", "workday", "night"))
+        manual.append(Manual(ts(day, 6, 48), "switch.martin_ziarovka", "switch", "on", "workday", "night"))
+    ents = {
+        "light.zahrada_lampas_1": EntityInfo("Záhrada lampáš 1", "Záhrada"),
+        "light.zahrada_lampas_2": EntityInfo("Záhrada lampáš 2", "Záhrada"),
+        "light.martin_globus": EntityInfo("Martin glóbus", "Martin"),
+        "switch.martin_ziarovka": EntityInfo("Martin žiarovka", "Martin"),
+    }
+    groups = {"light.zahrada_lampase": {"light.zahrada_lampas_1", "light.zahrada_lampas_2"}}
+    inp = make(manual, entities=ents)
+    inp.groups = groups
+    res = Analyzer(inp).run()
+    assert len(res) == 2
+    by = {tuple(s["entity_ids"]): s for s in res}
+    assert ("light.zahrada_lampase",) in by
+    martin = by[("light.martin_globus", "switch.martin_ziarovka")]
+    auto = build_automation(martin, ents, None, "sk")
+    assert auto["alias"].startswith("Martin – glóbus a žiarovka – zapnúť okolo")
+    assert {"action": "light.turn_on", "target": {"entity_id": "light.martin_globus"}} in auto["actions"]
+    assert {"action": "switch.turn_on", "target": {"entity_id": "switch.martin_ziarovka"}} in auto["actions"]

@@ -31,14 +31,16 @@ def _entity_info(hass: HomeAssistant, entity_id: str) -> EntityInfo:
     name = (state.attributes.get("friendly_name") if state else None) or entity_id
     device_class = state.attributes.get("device_class") if state else None
     area_name = None
+    device_id = None
     entry = er.async_get(hass).async_get(entity_id)
     if entry:
+        device_id = entry.device_id
         area_id = entry.area_id
         if area_id is None and entry.device_id and (dev := dr.async_get(hass).async_get(entry.device_id)):
             area_id = dev.area_id
         if area_id and (area := ar.async_get(hass).async_get_area(area_id)):
             area_name = area.name
-    return EntityInfo(name=str(name), area=area_name, device_class=device_class)
+    return EntityInfo(name=str(name), area=area_name, device_class=device_class, device_id=device_id)
 
 
 async def async_run_analysis(hass: HomeAssistant, data: PatternPilotData, options: dict[str, Any]) -> int:
@@ -53,9 +55,17 @@ async def async_run_analysis(hass: HomeAssistant, data: PatternPilotData, option
     rows = await hass.async_add_executor_job(data.store.analysis_rows, since)
 
     entities: dict[str, EntityInfo] = {}
-    for row in rows["manual"] + rows["triggers"]:
-        if row[1] not in entities:
-            entities[row[1]] = _entity_info(hass, row[1])
+    exclude: set[str] = set()
+    for row in rows["manual"] + rows["triggers"] + rows["automated"] + rows["overrides"]:
+        eid = row[1]
+        if eid not in entities:
+            entities[eid] = _entity_info(hass, eid)
+            if collector.is_ignored(eid):
+                exclude.add(eid)
+    groups = collector.group_map()
+    for group in groups:
+        if group not in entities:
+            entities[group] = _entity_info(hass, group)
 
     inp = Input(
         manual=[Manual(*r) for r in rows["manual"]],
@@ -67,7 +77,8 @@ async def async_run_analysis(hass: HomeAssistant, data: PatternPilotData, option
         first_ts=first_ts,
         day_type=collector.context.day_type,
         entities=entities,
-        exclude=set(collector.exclude_entities),
+        exclude=exclude | set(collector.exclude_entities),
+        groups=groups,
     )
     results = await hass.async_add_executor_job(Analyzer(inp).run)
 
@@ -80,10 +91,12 @@ async def async_run_analysis(hass: HomeAssistant, data: PatternPilotData, option
                 continue
             s["automation_config_id"] = st.attributes.get("id")
         else:
-            info = entities.get(s["entity_id"]) or _entity_info(hass, s["entity_id"])
+            for eid in s.get("entity_ids") or [s["entity_id"]]:
+                if eid not in entities:
+                    entities[eid] = _entity_info(hass, eid)
             trig = s.get("trigger_entity")
             trig_info = (entities.get(trig) or _entity_info(hass, trig)) if trig else None
-            auto = build_automation(s, info, trig_info, lang)
+            auto = build_automation(s, entities, trig_info, lang)
             if auto is None:
                 continue
             s["automation"] = auto

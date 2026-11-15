@@ -31,6 +31,9 @@ TRIGGER_EPISODE_S = 600  # trigger: A again within 10 min = same episode
 MIN_COVERAGE = 0.5  # trigger: share of B explained by A
 MIN_PRECISION = 0.4  # trigger: share of A (in the time range) followed by B
 MIN_OVERRIDES = 3  # improve: reverts in the last 14 days
+REVERT_S = 30  # improve: reverted within this after the automation changed it
+DEVICE_LINK_S = 3  # trigger: B typically within this after A = device link, not a person
+MERGE_MIN = 10  # time habits of one room within this many minutes are merged
 STRIP_DAYS = 14
 
 # what may be suggested and how (state → service)
@@ -85,6 +88,7 @@ class EntityInfo:
     name: str
     area: str | None = None
     device_class: str | None = None
+    device_id: str | None = None
 
 
 @dataclass
@@ -99,6 +103,7 @@ class Input:
     day_type: Callable[[date], str]
     entities: dict[str, EntityInfo] = field(default_factory=dict)
     exclude: set[str] = field(default_factory=set)
+    groups: dict[str, set[str]] = field(default_factory=dict)  # group entity → members
 
 
 def _sid(*parts: Any) -> str:
@@ -107,6 +112,11 @@ def _sid(*parts: Any) -> str:
 
 def _group(day_type: str) -> str:
     return "workday" if day_type == "workday" else "weekend"
+
+
+def _minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
 
 
 def _hhmm(minutes: int) -> str:
@@ -148,9 +158,59 @@ class Analyzer:
         trig_keys = {(s["entity_id"], s["action"]) for s in trig}
         out += trig
         out += [s for s in self.time_habits() if (s["entity_id"], s["action"]) not in trig_keys]
+        out = self.merge(out)
         out += self.improvements()
         out.sort(key=lambda s: s["score"], reverse=True)
         return out
+
+    # -- merging ---------------------------------------------------------------------
+    def merge(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Same action, same room, similar time (or same trigger) → one suggestion for several devices.
+
+        If the devices are exactly the members of a group, the group entity is used.
+        """
+        info = self.d.entities
+        for s in items:
+            s["entity_ids"] = [s["entity_id"]]
+
+        def area(eid: str) -> str | None:
+            return info[eid].area if eid in info else None
+
+        merged: list[dict[str, Any]] = []
+        for s in sorted(items, key=lambda x: x["score"], reverse=True):
+            target = None
+            for m in merged:
+                if m["kind"] != s["kind"] or m["action"] != s["action"]:
+                    continue
+                if s["kind"] == "time":
+                    same = (
+                        m["days"] == s["days"]
+                        and m["dark"] == s["dark"]
+                        and area(m["entity_id"]) is not None
+                        and area(m["entity_id"]) == area(s["entity_id"])
+                        and abs(_minutes(m["at"]) - _minutes(s["at"])) <= MERGE_MIN
+                    )
+                else:
+                    same = m["trigger_entity"] == s["trigger_entity"] and m["trigger_state"] == s["trigger_state"]
+                if same:
+                    target = m
+                    break
+            if target is None:
+                merged.append(s)
+            else:
+                target["entity_ids"].append(s["entity_id"])
+                target["hits"] = min(target["hits"], s["hits"])
+        for m in merged:
+            ids = set(m["entity_ids"])
+            if len(ids) > 1:
+                for group, members in self.d.groups.items():
+                    if members and members == ids:
+                        m["entity_ids"] = [group]
+                        break
+                m["entity_ids"] = sorted(m["entity_ids"])
+                m["entity_id"] = m["entity_ids"][0]
+                m["id"] = _sid(m["kind"], *m["entity_ids"], m["action"], m.get("days"), m.get("trigger_entity"))
+        return merged
 
     def _strip(self, hit_days: set[date], eligible: set[date]) -> list[int]:
         """Last 14 days: 2 = pattern happened, 1 = eligible day without it, 0 = not eligible."""
@@ -281,16 +341,24 @@ class Analyzer:
                 continue
             b_list.sort()
             best = None
+            b_dev = d.entities[entity_id].device_id if entity_id in d.entities else None
             for (t_entity, t_state), a_all in by_trigger.items():
                 if t_entity == entity_id:
                     continue
+                t_dev = d.entities[t_entity].device_id if t_entity in d.entities else None
+                if b_dev and t_dev == b_dev:
+                    continue  # input / sensor of the same device – a device link, not a habit
                 co = []
+                delays = []
                 for b in b_list:
                     i = bisect_right(a_all, b)
                     if i and b - a_all[i - 1] <= TRIGGER_DELAY_S:
                         co.append(b)
+                        delays.append(b - a_all[i - 1])
                 if len(co) < MIN_HITS:
                     continue
+                if median(delays) < DEVICE_LINK_S:
+                    continue  # nobody reacts that fast every time – binding / device logic
                 coverage = len(co) / len(b_list)
                 if coverage < MIN_COVERAGE:
                     continue
@@ -343,24 +411,38 @@ class Analyzer:
     def improvements(self) -> list[dict[str, Any]]:
         d = self.d
         since = (d.now - timedelta(days=STRIP_DAYS)).timestamp()
-        groups: dict[tuple[str, str], list[Override]] = defaultdict(list)
+        auto_ts: dict[str, list[float]] = defaultdict(list)
+        for a in d.automated:
+            auto_ts[a.entity_id].append(a.ts)
+        for lst in auto_ts.values():
+            lst.sort()
+        groups: dict[str, list[Override]] = defaultdict(list)
         for o in d.overrides:
-            if o.ts >= since and o.ref and o.ref not in d.exclude:
-                groups[(o.ref, o.entity_id)].append(o)
+            if o.ts < since or not o.ref or o.ref in d.exclude or o.entity_id in d.exclude:
+                continue
+            lst = auto_ts.get(o.entity_id, [])
+            i = bisect_right(lst, o.ts)
+            # a real "undo": reverted within 30 s after the automation changed it
+            if i and o.ts - lst[i - 1] <= REVERT_S:
+                groups[o.ref].append(o)
         out = []
-        for (ref, entity_id), items in groups.items():
+        for ref, items in groups.items():
             if len(items) < MIN_OVERRIDES:
                 continue
             days = {self.local(o.ts).date() for o in items}
-            states = defaultdict(int)
+            per_entity: dict[str, int] = defaultdict(int)
+            states: dict[str, int] = defaultdict(int)
             for o in items:
+                per_entity[o.entity_id] += 1
                 states[o.new] += 1
+            entities = sorted(per_entity, key=per_entity.get, reverse=True)
             out.append(
                 {
-                    "id": _sid("improve", ref, entity_id),
+                    "id": _sid("improve", ref),
                     "kind": "improve",
                     "automation": ref,
-                    "entity_id": entity_id,
+                    "entity_id": entities[0],
+                    "entity_ids": entities,
                     "action": max(states, key=states.get),
                     "hits": len(items),
                     "days_count": len(days),
@@ -392,20 +474,46 @@ def _what(domain: str, action: str, lang: str) -> str:
     return action
 
 
-def build_automation(s: dict[str, Any], info: EntityInfo | None, trig_info: EntityInfo | None, lang: str) -> dict[str, Any] | None:
-    """Home Assistant automation config for a suggestion (or None for 'improve')."""
+def _join(names: list[str], lang: str) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    word = " a " if lang == "sk" else " and "
+    return ", ".join(names[:-1]) + word + names[-1]
+
+
+def build_automation(
+    s: dict[str, Any],
+    info: EntityInfo | dict[str, EntityInfo] | None,
+    trig_info: EntityInfo | None,
+    lang: str,
+) -> dict[str, Any] | None:
+    """Home Assistant automation config for a suggestion (or None for 'improve').
+
+    ``info`` is either the EntityInfo of the single entity or a dict of all entities.
+    """
     if s["kind"] not in ("time", "trigger"):
         return None
-    entity_id, action = s["entity_id"], s["action"]
-    domain = entity_id.split(".")[0]
-    service = SERVICES.get(domain, {}).get(action)
-    if service is None:
-        return None
+    action = s["action"]
+    entity_ids = s.get("entity_ids") or [s["entity_id"]]
+    infos = info if isinstance(info, dict) else {s["entity_id"]: info} if info else {}
+    by_domain: dict[str, list[str]] = defaultdict(list)
+    for eid in entity_ids:
+        domain = eid.split(".")[0]
+        if SERVICES.get(domain, {}).get(action) is None:
+            return None
+        by_domain[domain].append(eid)
     sk = lang == "sk"
-    name = info.name if info else entity_id
-    area = info.area if info and info.area else None
-    what = _what(domain, action, lang)
+    first = infos.get(entity_ids[0])
+    area = first.area if first and first.area else None
 
+    def short(eid: str) -> str:
+        i = infos.get(eid)
+        name = i.name if i else eid
+        if area and name.lower().startswith(area.lower() + " "):
+            return name[len(area) + 1 :]
+        return name
+
+    what = _what(entity_ids[0].split(".")[0], action, lang)
     conditions: list[dict[str, Any]] = []
     if s["kind"] == "time":
         triggers = [{"trigger": "time", "at": f"{s['at']}:00"}]
@@ -415,9 +523,7 @@ def build_automation(s: dict[str, Any], info: EntityInfo | None, trig_info: Enti
             conditions.append({"condition": "time", "weekday": _WEEKEND})
         if s.get("dark"):
             conditions.append({"condition": "state", "entity_id": "sun.sun", "state": "below_horizon"})
-        desc_core = (
-            f"okolo {s['at']}" if sk else f"around {s['at']}"
-        )
+        desc_core = f"okolo {s['at']}" if sk else f"around {s['at']}"
     else:
         t_entity, t_state = s["trigger_entity"], s["trigger_state"]
         if t_entity.startswith("event."):
@@ -430,15 +536,19 @@ def build_automation(s: dict[str, Any], info: EntityInfo | None, trig_info: Enti
             )
         t_name = trig_info.name if trig_info else t_entity
         desc_core = f"pri {t_name}" if sk else f"on {t_name}"
-    # do nothing if it is already in the target state
-    if domain in ("light", "switch", "fan", "input_boolean", "media_player", "humidifier", "cover"):
+    if len(entity_ids) == 1 and entity_ids[0].split(".")[0] in (
+        "light", "switch", "fan", "input_boolean", "media_player", "humidifier", "cover"
+    ):
+        # do nothing if it is already in the target state
         conditions.append(
-            {"condition": "not", "conditions": [{"condition": "state", "entity_id": entity_id, "state": action}]}
+            {"condition": "not", "conditions": [{"condition": "state", "entity_id": entity_ids[0], "state": action}]}
         )
-
+    actions = [
+        {"action": f"{domain}.{SERVICES[domain][action]}", "target": {"entity_id": ids if len(ids) > 1 else ids[0]}}
+        for domain, ids in by_domain.items()
+    ]
     prefix = f"{area} – " if area else ""
-    short = name[len(area) + 1 :] if area and name.lower().startswith(area.lower() + " ") else name
-    alias = f"{prefix}{short} – {what} {desc_core}"
+    alias = f"{prefix}{_join([short(e) for e in entity_ids], lang)} – {what} {desc_core}"
     evidence = (
         f"Návrh Pattern Pilot: {s['hits']}× zistené" if sk else f"Pattern Pilot suggestion: seen {s['hits']}×"
     )
@@ -448,5 +558,5 @@ def build_automation(s: dict[str, Any], info: EntityInfo | None, trig_info: Enti
         "mode": "single",
         "triggers": triggers,
         "conditions": conditions,
-        "actions": [{"action": f"{domain}.{service}", "target": {"entity_id": entity_id}}],
+        "actions": actions,
     }

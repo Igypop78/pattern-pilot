@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.1] – 2026-11-15
+
+Better suggestions after the first real run (56 suggestions, many of them noise):
+- **Older data is cleaned too:** entities that are skipped today (hidden, groups, the source switch of a
+  "Change device type" helper, configuration entities) are ignored in the analysis even in data recorded
+  before they were skipped – no more duplicates like "Bathroom Up Mirror" next to "Mirror".
+- **A then B:** a trigger of the **same device** (e.g. a Shelly input of the same cover) and a reaction that
+  is typically **faster than 3 s** (a binding or device logic, nobody is that fast every time) are not
+  suggested.
+- **Improve automation:** counts only a real undo – reverted **within 30 s** after the automation changed
+  it (switching a light off when leaving the room is not an undo). **One suggestion per automation** with
+  all affected devices.
+- **Merging:** the same action in the same room at a similar time (±10 min), or after the same trigger,
+  becomes one suggestion for several devices. If they are exactly the members of a group, the group is used.
+- Card: shows the 10 best suggestions, the rest behind *Show more*.
+
 ## [0.2.0] – 2026-11-15
 
 **First suggestions.** Pattern Pilot now analyses the recorded history every night (and 3 minutes after

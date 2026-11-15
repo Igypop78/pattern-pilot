@@ -407,6 +407,32 @@ class Collector:
             self._mirrored = found
         return self._mirrored
 
+    def is_ignored(self, entity_id: str) -> bool:
+        """Would this entity be skipped today? (also applied to older recorded data)"""
+        if entity_id in self.exclude_entities or entity_id in self._mirrored_sources():
+            return True
+        state = self.hass.states.get(entity_id)
+        if state is not None and self._is_group(entity_id, state):
+            return True
+        entry = er.async_get(self.hass).async_get(entity_id)
+        if entry is not None:
+            if entry.entity_category is not None:
+                return True
+            if entry.hidden_by is not None and entity_id not in self._group_members():
+                return True
+        return False
+
+    def group_map(self) -> dict[str, set[str]]:
+        """Group entity → members (Home Assistant groups and Zigbee2MQTT groups)."""
+        out: dict[str, set[str]] = {k: set(v) for k, v in self.groups.members.items()}
+        for state in self.hass.states.async_all():
+            if state.domain == "scene":
+                continue
+            attr = state.attributes.get("entity_id")
+            if isinstance(attr, (list, tuple)):
+                out.setdefault(state.entity_id, set()).update(str(e) for e in attr)
+        return out
+
     def _is_group(self, entity_id: str, state: State) -> bool:
         """Group entities only repeat their members – the members are recorded instead.
 

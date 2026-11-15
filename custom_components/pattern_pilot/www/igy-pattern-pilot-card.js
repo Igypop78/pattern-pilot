@@ -51,6 +51,8 @@
     'kandidáti na automatizáciu': 'candidates for automation',
     'Práve sa stalo': 'Just happened',
     'Zatiaľ nič.': 'Nothing yet.',
+    ' a ': ' and ', 'a ďalšie ({0})': 'and {0} more',
+    'Zobraziť ďalšie ({0})': 'Show {0} more', 'Zobraziť menej': 'Show less',
     'zapnuté': 'on', 'vypnuté': 'off', 'otvorené': 'open', 'zatvorené': 'closed', 'doma': 'home', 'preč': 'away',
     'zamknuté': 'locked', 'odomknuté': 'unlocked',
     'aktivované': 'activated',
@@ -77,7 +79,7 @@
     'Do 90 s po „{0}“ to urobíš ručne': 'Within 90 s after “{0}” you do it by hand',
     '{0} z {1}×': '{0} of {1}×', 'po {0} % udalostí': 'after {0} % of them',
     'často ju rušíš': 'you often revert it',
-    'Po jej zásahu si do 2 min prepol {0} na „{1}“': 'Within 2 min after it ran you switched {0} to “{1}”',
+    'Po jej zásahu si do 30 s prepol {0} na „{1}“': 'Within 30 s after it ran you switched {0} to “{1}”',
     '{0}× za 14 dní': '{0}× in 14 days',
     'Prijať': 'Accept', 'Upraviť': 'Edit', 'Teraz nie': 'Not now', 'Nikdy': 'Never', 'Otvoriť automatizáciu': 'Open automation',
     'Vyriešené': 'Done', 'Otvoriť': 'Open', 'Vrátiť': 'Undo', 'Obnoviť': 'Restore', 'odložené': 'snoozed', 'nikdy': 'never',
@@ -93,7 +95,7 @@
     'pred {0} min': '{0} min ago'
   };
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.1';
   const C = { human: '#0a84ff', physical: '#ff9f0a', automation: '#30d158', system: '#8e8e93', external: '#bf5af2', device: '#64d2ff' };
   const ACTOR_ORDER = ['human', 'physical', 'automation', 'device', 'system', 'external'];
   const ACTOR_T = { human: 'ty (aplikácia, hlas)', physical: 'mimo HA', automation: 'automatizácie', device: 'programy zariadení', system: 'iné integrácie', external: 'vylúčení' };
@@ -371,9 +373,14 @@
       const n = this._name(id), a = this._area(id);
       return a && n.toLowerCase().startsWith(a.toLowerCase() + ' ') ? n.slice(a.length + 1) : n;
     }
+    _names(ids) {
+      const n = ids.map((i) => esc(this._short(i)));
+      return n.length <= 1 ? n.join('') : n.slice(0, -1).join(', ') + _(' a ') + n[n.length - 1];
+    }
     _sugText(s) {
-      const a = this._area(s.entity_id), pre = a ? `${esc(a)} – ` : '';
-      const verb = _(VERB[s.action] || s.action), what = esc(this._short(s.entity_id));
+      const ids = s.entity_ids && s.entity_ids.length ? s.entity_ids : [s.entity_id];
+      const a = this._area(ids[0]), pre = a ? `${esc(a)} – ` : '';
+      const verb = _(VERB[s.action] || s.action), what = this._names(ids);
       const strip = (s.strip || []).map((v) => `<i class="${v === 2 ? 'h' : v === 1 ? 'e' : ''}"></i>`).join('');
       if (s.kind === 'time') {
         const days = s.days === 'workday' ? ' ' + _('v pracovné dni') : s.days === 'weekend' ? ' ' + _('cez víkend') : '';
@@ -389,7 +396,7 @@
           evi: [_('Do 90 s po „{0}“ to urobíš ručne', tn), _('{0} z {1}×', s.hits, s.total), _('po {0} % udalostí', Math.round(s.precision * 100))].join(' · '), strip };
       }
       return { title: `${esc(this._name(s.automation))}: ${_('často ju rušíš')}`,
-        evi: [_('Po jej zásahu si do 2 min prepol {0} na „{1}“', esc(this._name(s.entity_id)), esc(this._stateText(s.action))), _('{0}× za 14 dní', s.hits)].join(' · '), strip };
+        evi: [_('Po jej zásahu si do 30 s prepol {0} na „{1}“', esc(this._name(ids[0])) + (ids.length > 1 ? ' ' + _('a ďalšie ({0})', ids.length - 1) : ''), esc(this._stateText(s.action))), _('{0}× za 14 dní', s.hits)].join(' · '), strip };
     }
     _renderSuggestions(list) {
       const sg = this._sug || {}, busy = this._busyId;
@@ -399,7 +406,8 @@
         h += `<div class="box emptybox"><b>${_('Zatiaľ žiadne návrhy')}</b><span>${_('Analýza beží každú noc. Môžeš ju spustiť aj teraz.')}</span>`
           + `<button class="btn" data-act="analyze"${this._analyzing ? ' disabled' : ''}>${this._analyzing ? _('Analyzujem…') : _('Analyzovať teraz')}</button></div>`;
       }
-      h += list.map((s) => {
+      const shown = this._showAll ? list : list.slice(0, 10);
+      h += shown.map((s) => {
         const k = KIND[s.kind] || KIND.time, t = this._sugText(s), dis = busy === s.id ? ' disabled' : '';
         const btns = s.kind === 'improve'
           ? `<button class="btn pri" data-act="open" data-id="${s.id}"${dis}>${_('Otvoriť automatizáciu')}</button><button class="btn" data-act="done" data-id="${s.id}"${dis}>${_('Vyriešené')}</button>`
@@ -408,6 +416,7 @@
           + `<span class="tag" style="background:${k.bg};color:${k.c}">${_(k.t)}</span></div></div><div class="evi">${t.evi}</div><div class="strip">${t.strip}</div>`
           + `<div class="acts">${btns}<button class="btn" data-act="snooze" data-id="${s.id}"${dis}>${_('Teraz nie')}</button><button class="btn" data-act="reject" data-id="${s.id}"${dis}>${_('Nikdy')}</button></div></div>`;
       }).join('');
+      if (list.length > 10) h += `<div style="text-align:center;margin-top:8px"><button class="btn" data-act="more">${this._showAll ? _('Zobraziť menej') : _('Zobraziť ďalšie ({0})', list.length - 10)}</button></div>`;
       if (list.length || sg.last_analysis) {
         h += `<div class="foot">${list.length ? `<span>${_('Posledných 14 dní: vzor sa stal · deň bez vzoru · nesledovaný deň')}</span>` : ''}`
           + (sg.last_analysis ? `<span>${_('Posledná analýza {0}', new Date(sg.last_analysis).toLocaleString(this._loc(), { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>` : '')
@@ -434,6 +443,7 @@
       this._sug = await this._hass.callWS(msg);
     }
     async _act(act, id) {
+      if (act === 'more') { this._showAll = !this._showAll; this._render(); return; }
       if (act === 'analyze') {
         this._analyzing = true; this._render();
         try { this._sug = await this._hass.callWS({ type: 'pattern_pilot/analyze' }); } catch (e) { this._toast(_('Nepodarilo sa: {0}', e.message || e)); }
